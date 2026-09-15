@@ -6,9 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import money, require_positive
-from app.db.models import CreditTopUp
+from app.db.models import CreditTopUp, User
 from app.db.payment_models import TopUpNotification
 from app.integrations.mercado_pago import MercadoPagoClient
+from app.services.audit import write_audit_log
 from app.services.wallets import apply_wallet_transaction
 
 
@@ -36,7 +37,9 @@ async def create_topup(
     await session.flush()
 
     checkout = await mercado_pago.create_credit_checkout(topup_id=topup.id, amount_brl=amount)
-    topup.provider_preference_id = checkout.preference_id
+    # A coluna manteve o nome legado para não quebrar recargas existentes; novas
+    # recargas guardam aqui o ID da order da Orders API.
+    topup.provider_preference_id = checkout.provider_order_id
     topup.checkout_url = checkout.checkout_url
     topup.status = "pending"
     await session.flush()
@@ -56,11 +59,119 @@ async def _ensure_approval_notification(
     return notification
 
 
+async def _approve_topup(
+    session: AsyncSession,
+    *,
+    topup: CreditTopUp,
+    ledger_reference: str,
+    provider_kind: str,
+    provider_resource_id: str,
+) -> CreditTopUp:
+    if topup.status == "approved":
+        await _ensure_approval_notification(session, topup_id=topup.id)
+        return topup
+
+    topup.status = "approved"
+    topup.approved_at = datetime.now(UTC)
+    await apply_wallet_transaction(
+        session,
+        user_id=topup.user_id,
+        amount=topup.credits_amount,
+        kind="topup",
+        reference=ledger_reference,
+        details={
+            "topup_id": str(topup.id),
+            "provider": "mercado_pago",
+            "provider_kind": provider_kind,
+            "provider_resource_id": provider_resource_id,
+        },
+    )
+
+    user = await session.get(User, topup.user_id)
+    await write_audit_log(
+        session,
+        guild_id=topup.guild_id,
+        actor_discord_id=None,
+        action="topup.approved",
+        target_type="topup",
+        target_id=str(topup.id),
+        details={
+            "amount_brl": str(money(topup.amount_brl)),
+            "credits": str(money(topup.credits_amount)),
+            "customer_discord_id": user.discord_user_id if user is not None else None,
+            "provider": "mercado_pago",
+            "provider_kind": provider_kind,
+            "provider_resource_id": provider_resource_id,
+        },
+    )
+    await _ensure_approval_notification(session, topup_id=topup.id)
+    await session.flush()
+    return topup
+
+
+async def process_order_update(
+    session: AsyncSession,
+    *,
+    order: dict,
+) -> CreditTopUp | None:
+    order_id = str(order.get("id") or "")
+    if not order_id:
+        raise TopUpValidationError("Order sem ID")
+
+    external_reference = str(order.get("external_reference") or "")
+    if not external_reference.startswith("topup:"):
+        return None
+
+    try:
+        topup_id = UUID(external_reference.removeprefix("topup:"))
+    except ValueError as exc:
+        raise TopUpValidationError("Referência externa inválida") from exc
+
+    topup = await session.scalar(
+        select(CreditTopUp).where(CreditTopUp.id == topup_id).with_for_update()
+    )
+    if topup is None:
+        raise TopUpValidationError("Recarga não encontrada")
+
+    provider_order_id = topup.provider_preference_id
+    if provider_order_id and provider_order_id != order_id:
+        raise TopUpValidationError("Order não corresponde à recarga")
+    if provider_order_id is None:
+        topup.provider_preference_id = order_id
+
+    if topup.status == "approved":
+        await _ensure_approval_notification(session, topup_id=topup.id)
+        return topup
+
+    provider_status = str(order.get("status") or "")
+    status_detail = str(order.get("status_detail") or "")
+    if provider_status != "processed" or status_detail != "accredited":
+        topup.status = (status_detail or provider_status or "pending")[:24]
+        await session.flush()
+        return topup
+
+    currency = str(order.get("currency") or "")
+    paid_amount = money(str(order.get("total_paid_amount") or order.get("total_amount") or "0"))
+    if currency != "BRL":
+        raise TopUpValidationError("Moeda inesperada")
+    if paid_amount != money(topup.amount_brl):
+        raise TopUpValidationError("Valor pago não corresponde à recarga")
+
+    return await _approve_topup(
+        session,
+        topup=topup,
+        ledger_reference=f"mercado_pago:order:{order_id}",
+        provider_kind="order",
+        provider_resource_id=order_id,
+    )
+
+
 async def process_approved_payment(
     session: AsyncSession,
     *,
     payment: dict,
 ) -> CreditTopUp | None:
+    """Processa webhooks do fluxo legado de Preferences/Payments."""
     payment_id = str(payment.get("id", ""))
     if not payment_id:
         raise TopUpValidationError("Pagamento sem ID")
@@ -86,7 +197,7 @@ async def process_approved_payment(
 
     status = str(payment.get("status") or "")
     if status != "approved":
-        topup.status = status or "pending"
+        topup.status = (status or "pending")[:24]
         if topup.provider_payment_id is None:
             topup.provider_payment_id = payment_id
         await session.flush()
@@ -109,16 +220,10 @@ async def process_approved_payment(
         raise TopUpValidationError("Pagamento já associado a outra recarga")
 
     topup.provider_payment_id = payment_id
-    topup.status = "approved"
-    topup.approved_at = datetime.now(UTC)
-    await apply_wallet_transaction(
+    return await _approve_topup(
         session,
-        user_id=topup.user_id,
-        amount=topup.credits_amount,
-        kind="topup",
-        reference=f"mercado_pago:payment:{payment_id}",
-        details={"topup_id": str(topup.id)},
+        topup=topup,
+        ledger_reference=f"mercado_pago:payment:{payment_id}",
+        provider_kind="payment",
+        provider_resource_id=payment_id,
     )
-    await _ensure_approval_notification(session, topup_id=topup.id)
-    await session.flush()
-    return topup

@@ -41,6 +41,17 @@ Bot:
 python -m app.bot.main
 ```
 
+## Mercado Pago
+As novas recargas usam **Checkout Pro via Orders API**. O backend cria uma order com chave de idempotência, recebe o `checkout_url` e só adiciona créditos depois de consultar a order autenticada e confirmar `processed/accredited` com valor e moeda esperados.
+
+No painel do Mercado Pago, configure a URL HTTPS:
+
+```text
+https://SEU-DOMINIO/webhooks/mercado-pago
+```
+
+Ative o evento **Order (Mercado Pago)**. O endpoint ainda aceita o evento legado `payment` para recargas antigas criadas pelo fluxo de Preferences.
+
 ## Configuração pelo Discord
 Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.
 
