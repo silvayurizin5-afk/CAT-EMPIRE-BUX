@@ -1,10 +1,14 @@
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import money
 from app.db.models import Product, RobuxRate, TermsDocument
+
+
+def _available_product_clause():
+    return or_(Product.stock_quantity.is_(None), Product.stock_quantity > 0)
 
 
 async def list_active_products(
@@ -14,7 +18,11 @@ async def list_active_products(
     product_type: str | None = None,
     limit: int = 25,
 ) -> list[Product]:
-    stmt = select(Product).where(Product.guild_id == guild_id, Product.active.is_(True))
+    stmt = select(Product).where(
+        Product.guild_id == guild_id,
+        Product.active.is_(True),
+        _available_product_clause(),
+    )
     if product_type:
         stmt = stmt.where(Product.product_type == product_type)
     stmt = stmt.order_by(Product.sort_order, Product.name).limit(limit)
@@ -37,7 +45,11 @@ async def list_products(session: AsyncSession, *, guild_id: int, limit: int = 25
 async def list_product_types(session: AsyncSession, *, guild_id: int) -> list[str]:
     rows = await session.scalars(
         select(Product.product_type)
-        .where(Product.guild_id == guild_id, Product.active.is_(True))
+        .where(
+            Product.guild_id == guild_id,
+            Product.active.is_(True),
+            _available_product_clause(),
+        )
         .distinct()
         .order_by(Product.product_type)
     )
@@ -90,6 +102,19 @@ async def update_product_presentation(
     product.image_url = (image_url or "").strip() or None
     product.emoji = (emoji or "").strip() or None
     product.delivery_mode = normalized_delivery
+    await session.flush()
+    return product
+
+
+async def set_product_stock(
+    session: AsyncSession,
+    *,
+    product: Product,
+    stock_quantity: int | None,
+) -> Product:
+    if stock_quantity is not None and stock_quantity < 0:
+        raise ValueError("Estoque não pode ser negativo")
+    product.stock_quantity = stock_quantity
     await session.flush()
     return product
 

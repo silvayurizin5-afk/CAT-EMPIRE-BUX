@@ -4,12 +4,22 @@ import discord
 
 from app.db.models import Product
 from app.db.session import SessionLocal
-from app.services.catalog import list_products, set_product_active, update_product_presentation
+from app.services.catalog import (
+    list_products,
+    set_product_active,
+    set_product_stock,
+    update_product_presentation,
+)
 
 
 def build_product_admin_embed(product: Product) -> discord.Embed:
     status = "Ativo" if product.active else "Desativado"
-    price = f"{product.price_credits:.2f} créditos" if product.price_credits is not None else "Sob cotação"
+    price = (
+        f"{product.price_credits:.2f} créditos"
+        if product.price_credits is not None
+        else "Sob cotação"
+    )
+    stock = "Ilimitado" if product.stock_quantity is None else str(product.stock_quantity)
     embed = discord.Embed(
         title=f"Produto • {product.name}",
         description=product.description or "Sem descrição.",
@@ -18,6 +28,7 @@ def build_product_admin_embed(product: Product) -> discord.Embed:
     embed.add_field(name="Tipo", value=product.product_type)
     embed.add_field(name="Jogo", value=product.game_name or "—")
     embed.add_field(name="Preço", value=price)
+    embed.add_field(name="Estoque", value=stock)
     embed.add_field(name="Entrega", value=product.delivery_mode)
     embed.add_field(name="Status", value=status)
     embed.add_field(name="Emoji", value=product.emoji or "—")
@@ -102,6 +113,47 @@ class ProductPresentationModal(discord.ui.Modal):
         )
 
 
+class ProductStockModal(discord.ui.Modal, title="Configurar estoque"):
+    quantity = discord.ui.TextInput(
+        label="Quantidade (vazio = ilimitado)",
+        required=False,
+        placeholder="Ex: 25",
+        max_length=12,
+    )
+
+    def __init__(self, product: Product) -> None:
+        super().__init__()
+        self.product_id = product.id
+        self.quantity.default = (
+            "" if product.stock_quantity is None else str(product.stock_quantity)
+        )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.quantity).strip()
+        try:
+            stock = int(raw) if raw else None
+            if stock is not None and stock < 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message(
+                "Estoque inválido. Use um número inteiro maior ou igual a zero.",
+                ephemeral=True,
+            )
+            return
+
+        async with SessionLocal() as session, session.begin():
+            product = await session.get(Product, self.product_id)
+            if product is None:
+                await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
+                return
+            await set_product_stock(session, product=product, stock_quantity=stock)
+
+        label = "ilimitado" if stock is None else str(stock)
+        await interaction.response.send_message(
+            f"Estoque atualizado para **{label}**.", ephemeral=True
+        )
+
+
 class ProductActionsView(discord.ui.View):
     def __init__(self, product_id: int) -> None:
         super().__init__(timeout=180)
@@ -115,6 +167,15 @@ class ProductActionsView(discord.ui.View):
             await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
             return
         await interaction.response.send_modal(ProductPresentationModal(product))
+
+    @discord.ui.button(label="Estoque", style=discord.ButtonStyle.primary)
+    async def stock(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        async with SessionLocal() as session:
+            product = await session.get(Product, self.product_id)
+        if product is None:
+            await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
+            return
+        await interaction.response.send_modal(ProductStockModal(product))
 
     @discord.ui.button(label="Ativar/Desativar", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -138,7 +199,8 @@ class ProductManageSelect(discord.ui.Select):
                 value=str(product.id),
                 description=(
                     f"{product.product_type} • "
-                    f"{'ativo' if product.active else 'desativado'}"
+                    f"{'ativo' if product.active else 'desativado'} • "
+                    f"estoque {'∞' if product.stock_quantity is None else product.stock_quantity}"
                 )[:100],
                 emoji=product.emoji or None,
             )

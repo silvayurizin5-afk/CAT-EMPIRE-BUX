@@ -110,6 +110,7 @@ class Product(Base, TimestampMixin):
     image_url: Mapped[str | None] = mapped_column(Text)
     emoji: Mapped[str | None] = mapped_column(String(128))
     delivery_mode: Mapped[str] = mapped_column(String(32), default="manual", server_default="manual")
+    stock_quantity: Mapped[int | None] = mapped_column(Integer)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
@@ -117,6 +118,10 @@ class Product(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("guild_id", "slug", name="uq_products_guild_slug"),
         CheckConstraint("price_credits IS NULL OR price_credits >= 0", name="ck_product_price_non_negative"),
+        CheckConstraint(
+            "stock_quantity IS NULL OR stock_quantity >= 0",
+            name="ck_product_stock_non_negative",
+        ),
     )
 
 

@@ -14,6 +14,10 @@ class OrderStateError(ValueError):
     pass
 
 
+class OutOfStockError(ValueError):
+    pass
+
+
 async def create_product_order(
     session: AsyncSession,
     *,
@@ -22,32 +26,40 @@ async def create_product_order(
     product: Product,
     quantity: int = 1,
 ) -> Order:
-    if not product.active:
-        raise ValueError("Produto indisponível")
-    if product.price_credits is None:
-        raise ValueError("Produto exige cotação antes da compra")
     if quantity <= 0:
         raise ValueError("Quantidade inválida")
 
-    unit_price = require_positive(product.price_credits)
+    locked_product = await session.scalar(
+        select(Product).where(Product.id == product.id).with_for_update()
+    )
+    if locked_product is None or locked_product.guild_id != guild_id or not locked_product.active:
+        raise ValueError("Produto indisponível")
+    if locked_product.price_credits is None:
+        raise ValueError("Produto exige cotação antes da compra")
+    if locked_product.stock_quantity is not None:
+        if locked_product.stock_quantity < quantity:
+            raise OutOfStockError("Estoque insuficiente para esta compra")
+        locked_product.stock_quantity -= quantity
+
+    unit_price = require_positive(locked_product.price_credits)
     total = money(unit_price * quantity)
     order = Order(guild_id=guild_id, user_id=user_id, total_credits=total, status="pending")
     session.add(order)
     await session.flush()
 
-    metadata = dict(product.metadata_json or {})
-    metadata.setdefault("game_name", product.game_name)
-    metadata.setdefault("product_type", product.product_type)
-    metadata.setdefault("product_slug", product.slug)
+    metadata = dict(locked_product.metadata_json or {})
+    metadata.setdefault("game_name", locked_product.game_name)
+    metadata.setdefault("product_type", locked_product.product_type)
+    metadata.setdefault("product_slug", locked_product.slug)
 
     session.add(
         OrderItem(
             order_id=order.id,
-            product_id=product.id,
-            name_snapshot=product.name,
+            product_id=locked_product.id,
+            name_snapshot=locked_product.name,
             unit_price=unit_price,
             quantity=quantity,
-            image_url_snapshot=product.image_url,
+            image_url_snapshot=locked_product.image_url,
             metadata_json=metadata,
         )
     )
@@ -155,6 +167,22 @@ async def refund_order(session: AsyncSession, *, order_id: UUID, reason: str) ->
     user = await session.scalar(select(User).where(User.id == order.user_id).with_for_update())
     if user is not None:
         user.total_spent = max(money("0"), money(user.total_spent - order.total_credits))
+
+    items = list(
+        (
+            await session.scalars(
+                select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.id)
+            )
+        ).all()
+    )
+    for item in items:
+        if item.product_id is None:
+            continue
+        product = await session.scalar(
+            select(Product).where(Product.id == item.product_id).with_for_update()
+        )
+        if product is not None and product.stock_quantity is not None:
+            product.stock_quantity += item.quantity
 
     reminder = await session.scalar(
         select(FeedbackReminder).where(FeedbackReminder.order_id == order.id).with_for_update()

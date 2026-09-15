@@ -13,7 +13,12 @@ from app.db.models import Product, RobuxRate, TermsDocument
 from app.db.session import SessionLocal
 from app.integrations.mercado_pago import MercadoPagoClient, MercadoPagoError
 from app.services.catalog import list_active_products, list_active_terms, list_product_types
-from app.services.orders import create_product_order, create_robux_order, pay_order_with_credits
+from app.services.orders import (
+    OutOfStockError,
+    create_product_order,
+    create_robux_order,
+    pay_order_with_credits,
+)
 from app.services.profiles import get_customer_profile
 from app.services.quotes import list_active_robux_rates
 from app.services.topups import create_topup
@@ -134,6 +139,16 @@ class ConfirmPurchaseView(discord.ui.View):
                     embed=None,
                     view=None,
                 )
+                return
+            except OutOfStockError:
+                await interaction.edit_original_response(
+                    content="Esse produto acabou de ficar sem estoque.",
+                    embed=None,
+                    view=None,
+                )
+                return
+            except ValueError as exc:
+                await interaction.edit_original_response(content=str(exc), embed=None, view=None)
                 return
 
         ticket_text = await _finish_paid_order(interaction, order.id)
@@ -317,6 +332,8 @@ class ProductSelect(discord.ui.Select):
         )
         embed.add_field(name="Jogo", value=product.game_name or "—")
         embed.add_field(name="Preço", value=price)
+        if product.stock_quantity is not None:
+            embed.add_field(name="Estoque", value=str(product.stock_quantity))
         if product.image_url:
             embed.set_image(url=product.image_url)
         await interaction.response.edit_message(
