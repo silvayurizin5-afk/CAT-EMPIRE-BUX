@@ -3,7 +3,8 @@ import pytest
 
 from app.bot.views.automation_admin import AutoReplyActionsView, RobuxRateActionsView
 from app.bot.views.product_admin import ProductActionsView
-from app.bot.views.terms_admin import CompleteAdminPanelView, TermsActionsView
+from app.bot.views.rank_admin import FullAdminPanelView, RankTierActionsView
+from app.bot.views.terms_admin import TermsActionsView
 from app.bot.views.terms_gate import TermsGateView, build_terms_required_embed
 from app.db.models import TermsDocument
 
@@ -18,7 +19,7 @@ def _button_labels(view: discord.ui.View) -> set[str]:
 
 @pytest.mark.asyncio
 async def test_extended_admin_panel_keeps_base_actions() -> None:
-    view = CompleteAdminPanelView()
+    view = FullAdminPanelView()
     labels = _button_labels(view)
     assert "Cargos" in labels
     assert "Canais" in labels
@@ -30,6 +31,7 @@ async def test_extended_admin_panel_keeps_base_actions() -> None:
     assert "Feedbacks" in labels
     assert "Mensagens ticket" in labels
     assert "Gerenciar termos" in labels
+    assert "Gerenciar faixas" in labels
     view.stop()
 
 
@@ -59,6 +61,15 @@ async def test_terms_admin_exposes_version_edit_and_toggle() -> None:
     view = TermsActionsView(terms_id=1)
     labels = _button_labels(view)
     assert "Editar / Nova versão" in labels
+    assert "Ativar/Desativar" in labels
+    view.stop()
+
+
+@pytest.mark.asyncio
+async def test_rank_admin_exposes_edit_and_toggle() -> None:
+    view = RankTierActionsView(tier_id=1)
+    labels = _button_labels(view)
+    assert "Editar" in labels
     assert "Ativar/Desativar" in labels
     view.stop()
 
