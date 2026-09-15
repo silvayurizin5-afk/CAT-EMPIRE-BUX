@@ -75,12 +75,16 @@ async def create_robux_order(
     rate: RobuxRate,
     robux: int,
 ) -> Order:
-    if not rate.active or rate.guild_id != guild_id:
-        raise ValueError("Cotação de Robux indisponível")
     if robux <= 0 or robux > 1_000_000:
         raise ValueError("Quantidade de Robux inválida")
 
-    total = require_positive(money(Decimal(robux) * rate.price_per_robux))
+    locked_rate = await session.scalar(
+        select(RobuxRate).where(RobuxRate.id == rate.id).with_for_update()
+    )
+    if locked_rate is None or locked_rate.guild_id != guild_id or not locked_rate.active:
+        raise ValueError("Cotação de Robux indisponível")
+
+    total = require_positive(money(Decimal(robux) * locked_rate.price_per_robux))
     order = Order(guild_id=guild_id, user_id=user_id, total_credits=total, status="pending")
     session.add(order)
     await session.flush()
@@ -88,16 +92,16 @@ async def create_robux_order(
         OrderItem(
             order_id=order.id,
             product_id=None,
-            name_snapshot=f"{rate.label} • {robux} Robux",
+            name_snapshot=f"{locked_rate.label} • {robux} Robux",
             unit_price=total,
             quantity=1,
             metadata_json={
                 "product_type": "robux",
                 "robux_amount": robux,
-                "rate_code": rate.code,
-                "rate_label": rate.label,
-                "price_per_robux": str(rate.price_per_robux),
-                "delivery_label": rate.delivery_label,
+                "rate_code": locked_rate.code,
+                "rate_label": locked_rate.label,
+                "price_per_robux": str(locked_rate.price_per_robux),
+                "delivery_label": locked_rate.delivery_label,
             },
         )
     )
