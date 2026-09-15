@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import money, require_positive
 from app.db.models import CreditTopUp
+from app.db.payment_models import TopUpNotification
 from app.integrations.mercado_pago import MercadoPagoClient
 from app.services.wallets import apply_wallet_transaction
 
@@ -42,6 +43,19 @@ async def create_topup(
     return topup
 
 
+async def _ensure_approval_notification(
+    session: AsyncSession, *, topup_id: UUID
+) -> TopUpNotification:
+    notification = await session.scalar(
+        select(TopUpNotification).where(TopUpNotification.topup_id == topup_id)
+    )
+    if notification is None:
+        notification = TopUpNotification(topup_id=topup_id)
+        session.add(notification)
+        await session.flush()
+    return notification
+
+
 async def process_approved_payment(
     session: AsyncSession,
     *,
@@ -67,6 +81,7 @@ async def process_approved_payment(
         raise TopUpValidationError("Recarga não encontrada")
 
     if topup.status == "approved":
+        await _ensure_approval_notification(session, topup_id=topup.id)
         return topup
 
     status = str(payment.get("status") or "")
@@ -104,5 +119,6 @@ async def process_approved_payment(
         reference=f"mercado_pago:payment:{payment_id}",
         details={"topup_id": str(topup.id)},
     )
+    await _ensure_approval_notification(session, topup_id=topup.id)
     await session.flush()
     return topup
