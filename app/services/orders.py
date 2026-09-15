@@ -1,11 +1,12 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import money, require_positive
-from app.db.models import Order, OrderItem, Product, User
+from app.db.models import Order, OrderItem, Product, RobuxRate, User
 from app.services.wallets import apply_wallet_transaction
 
 
@@ -48,6 +49,44 @@ async def create_product_order(
             quantity=quantity,
             image_url_snapshot=product.image_url,
             metadata_json=metadata,
+        )
+    )
+    await session.flush()
+    return order
+
+
+async def create_robux_order(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    user_id: int,
+    rate: RobuxRate,
+    robux: int,
+) -> Order:
+    if not rate.active or rate.guild_id != guild_id:
+        raise ValueError("Cotação de Robux indisponível")
+    if robux <= 0 or robux > 1_000_000:
+        raise ValueError("Quantidade de Robux inválida")
+
+    total = require_positive(money(Decimal(robux) * rate.price_per_robux))
+    order = Order(guild_id=guild_id, user_id=user_id, total_credits=total, status="pending")
+    session.add(order)
+    await session.flush()
+    session.add(
+        OrderItem(
+            order_id=order.id,
+            product_id=None,
+            name_snapshot=f"{rate.label} • {robux} Robux",
+            unit_price=total,
+            quantity=1,
+            metadata_json={
+                "product_type": "robux",
+                "robux_amount": robux,
+                "rate_code": rate.code,
+                "rate_label": rate.label,
+                "price_per_robux": str(rate.price_per_robux),
+                "delivery_label": rate.delivery_label,
+            },
         )
     )
     await session.flush()
