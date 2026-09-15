@@ -1,6 +1,8 @@
+import asyncio
 from decimal import Decimal, InvalidOperation
 
 import discord
+from app.bot.workflows.tickets import open_order_ticket
 from app.db.models import Product, TermsDocument
 from app.db.session import SessionLocal
 from app.integrations.mercado_pago import MercadoPagoClient, MercadoPagoError
@@ -67,33 +69,57 @@ class ConfirmPurchaseView(discord.ui.View):
     def __init__(self, product_id: int) -> None:
         super().__init__(timeout=180)
         self.product_id = product_id
+        self._lock = asyncio.Lock()
+        self._order_id = None
 
     @discord.ui.button(label="Confirmar compra", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None:
             return
-        try:
-            async with SessionLocal() as session, session.begin():
-                user = await get_or_create_user(session, interaction.user.id)
-                product = await session.get(Product, self.product_id)
-                if product is None or product.guild_id != interaction.guild.id:
-                    await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
-                    return
-                order = await create_product_order(
-                    session,
-                    guild_id=interaction.guild.id,
-                    user_id=user.id,
-                    product=product,
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with self._lock:
+            if self._order_id is not None:
+                await interaction.edit_original_response(
+                    content=f"Essa compra já foi criada: `{str(self._order_id)[:8]}`.",
+                    embed=None,
+                    view=None,
                 )
-                await pay_order_with_credits(session, order_id=order.id)
-        except InsufficientCreditsError:
-            await interaction.response.send_message(
-                "Você não tem créditos suficientes. Use **Adicionar créditos** no painel da loja.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.edit_message(
-            content=f"Compra confirmada. Pedido `{str(order.id)[:8]}` criado. A etapa de ticket/entrega será aberta pelo fluxo da loja.",
+                return
+            try:
+                async with SessionLocal() as session, session.begin():
+                    user = await get_or_create_user(session, interaction.user.id)
+                    product = await session.get(Product, self.product_id)
+                    if product is None or product.guild_id != interaction.guild.id:
+                        await interaction.edit_original_response(
+                            content="Produto não encontrado.", embed=None, view=None
+                        )
+                        return
+                    order = await create_product_order(
+                        session,
+                        guild_id=interaction.guild.id,
+                        user_id=user.id,
+                        product=product,
+                    )
+                    await pay_order_with_credits(session, order_id=order.id)
+                self._order_id = order.id
+            except InsufficientCreditsError:
+                await interaction.edit_original_response(
+                    content=(
+                        "Você não tem créditos suficientes. Use **Adicionar créditos** "
+                        "no painel da loja."
+                    ),
+                    embed=None,
+                    view=None,
+                )
+                return
+
+        ticket = await open_order_ticket(interaction, order_id=order.id)
+        ticket_text = ticket.mention if ticket is not None else "ticket pendente de configuração"
+        await interaction.edit_original_response(
+            content=(
+                f"Compra confirmada. Pedido `{str(order.id)[:8]}` criado. "
+                f"Atendimento: {ticket_text}."
+            ),
             embed=None,
             view=None,
         )
@@ -210,7 +236,7 @@ class StoreHomeView(discord.ui.View):
         style=discord.ButtonStyle.primary,
         custom_id="nextbuy:store:buy",
     )
-    async def buy(self, interaction: discord.Interaction*, _: discord.ui.Button) -> None:
+    async def buy(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None:
             return
         async with SessionLocal() as session:
@@ -224,13 +250,17 @@ class StoreHomeView(discord.ui.View):
 
     @discord.ui.button(
         label="Adicionar créditos",
-        style=discord.ButtonStyle.sucess,
+        style=discord.ButtonStyle.success,
         custom_id="nextbuy:store:topup",
     )
     async def topup(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await interaction.response.send_modal(TopUpModal())
 
-    @discord.ui.button(label="Meu perfil", style=discord.ButtonStyle.secondary, custom_id="nextbuy:store:profile")
+    @discord.ui.button(
+        label="Meu perfil",
+        style=discord.ButtonStyle.secondary,
+        custom_id="nextbuy:store:profile",
+    )
     async def profile(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None:
             return

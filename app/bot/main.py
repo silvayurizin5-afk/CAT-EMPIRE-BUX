@@ -17,9 +17,30 @@ class NextBuyBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
 
+    async def _restore_ticket_views(self) -> None:
+        from sqlalchemy import select
+
+        from app.bot.workflows.tickets import TicketStaffView
+        from app.db.models import Order
+        from app.db.session import SessionLocal
+
+        async with SessionLocal() as session:
+            order_ids = (
+                await session.scalars(
+                    select(Order.id).where(
+                        Order.ticket_channel_id.is_not(None),
+                        Order.status.in_(["paid", "processing", "delivered"]),
+                    )
+                )
+            ).all()
+        for order_id in order_ids:
+            self.add_view(TicketStaffView(order_id))
+
     async def setup_hook(self) -> None:
         await self.load_extension("app.bot.cogs.admin")
+        await self.load_extension("app.bot.cogs.feedback")
         self.add_view(StoreHomeView())
+        await self._restore_ticket_views()
         if settings.discord_guild_id:
             guild = discord.Object(id=settings.discord_guild_id)
             self.tree.copy_global_to(guild=guild)
