@@ -86,7 +86,7 @@ class EmbedDraft:
 
 
 class _BuilderModal(discord.ui.Modal):
-    def __init__(self, *, title: str, builder: "EmbedBuilderView") -> None:
+    def __init__(self, *, title: str, builder: EmbedBuilderView) -> None:
         super().__init__(title=title)
         self.builder = builder
 
@@ -98,7 +98,7 @@ class _BuilderModal(discord.ui.Modal):
 
 
 class TitleModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Editar título", builder=builder)
         self.title_input = discord.ui.TextInput(
             label="Título",
@@ -115,7 +115,7 @@ class TitleModal(_BuilderModal):
 
 
 class DescriptionModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Editar descrição", builder=builder)
         self.description_input = discord.ui.TextInput(
             label="Descrição",
@@ -133,7 +133,7 @@ class DescriptionModal(_BuilderModal):
 
 
 class ColorModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Editar cor", builder=builder)
         self.color_input = discord.ui.TextInput(
             label="Cor hexadecimal",
@@ -156,7 +156,7 @@ class ColorModal(_BuilderModal):
 
 
 class AuthorModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Editar autor", builder=builder)
         self.name_input = discord.ui.TextInput(
             label="Nome do autor",
@@ -186,7 +186,7 @@ class AuthorModal(_BuilderModal):
 
 
 class FieldModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Adicionar campo", builder=builder)
         self.name_input = discord.ui.TextInput(
             label="Nome do campo",
@@ -224,7 +224,7 @@ class FieldModal(_BuilderModal):
 
 
 class ImagesModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Imagem e thumbnail", builder=builder)
         self.image_input = discord.ui.TextInput(
             label="URL da imagem grande",
@@ -256,7 +256,7 @@ class ImagesModal(_BuilderModal):
 
 
 class FooterModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Editar rodapé", builder=builder)
         self.text_input = discord.ui.TextInput(
             label="Texto do rodapé",
@@ -286,7 +286,7 @@ class FooterModal(_BuilderModal):
 
 
 class LinkButtonModal(_BuilderModal):
-    def __init__(self, builder: "EmbedBuilderView") -> None:
+    def __init__(self, builder: EmbedBuilderView) -> None:
         super().__init__(title="Adicionar botão", builder=builder)
         self.label_input = discord.ui.TextInput(
             label="Texto do botão",
