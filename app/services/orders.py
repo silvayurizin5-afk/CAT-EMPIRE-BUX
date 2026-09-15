@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.money import money, require_positive
 from app.db.models import FeedbackReminder, Order, OrderItem, Product, RobuxRate, User
 from app.services.audit import write_audit_log
+from app.services.commerce_locks import require_commerce_unlocked
 from app.services.wallets import apply_wallet_transaction
 
 
@@ -119,6 +120,15 @@ async def pay_order_with_credits(session: AsyncSession, *, order_id: UUID) -> Or
     if order.status != "pending":
         raise OrderStateError(f"Pedido não pode ser pago no estado {order.status}")
 
+    user = await session.scalar(select(User).where(User.id == order.user_id).with_for_update())
+    if user is None:
+        raise RuntimeError("Usuário do pedido não encontrado")
+    await require_commerce_unlocked(
+        session,
+        guild_id=order.guild_id,
+        user_id=user.id,
+    )
+
     await apply_wallet_transaction(
         session,
         user_id=order.user_id,
@@ -128,9 +138,6 @@ async def pay_order_with_credits(session: AsyncSession, *, order_id: UUID) -> Or
         details={"order_id": str(order.id)},
     )
 
-    user = await session.scalar(select(User).where(User.id == order.user_id).with_for_update())
-    if user is None:
-        raise RuntimeError("Usuário do pedido não encontrado")
     user.total_spent = money(user.total_spent + order.total_credits)
     order.status = "paid"
     order.paid_at = datetime.now(UTC)
@@ -173,6 +180,10 @@ async def refund_order(session: AsyncSession, *, order_id: UUID, reason: str) ->
     if order.status not in {"paid", "processing", "delivered"}:
         raise OrderStateError("Pedido não está elegível para reembolso")
 
+    user = await session.scalar(select(User).where(User.id == order.user_id).with_for_update())
+    if user is None:
+        raise RuntimeError("Usuário do pedido não encontrado")
+
     await apply_wallet_transaction(
         session,
         user_id=order.user_id,
@@ -181,9 +192,7 @@ async def refund_order(session: AsyncSession, *, order_id: UUID, reason: str) ->
         reference=f"order:{order.id}:refund",
         details={"order_id": str(order.id), "reason": reason[:500]},
     )
-    user = await session.scalar(select(User).where(User.id == order.user_id).with_for_update())
-    if user is not None:
-        user.total_spent = max(money("0"), money(user.total_spent - order.total_credits))
+    user.total_spent = max(money("0"), money(user.total_spent - order.total_credits))
 
     items = list(
         (

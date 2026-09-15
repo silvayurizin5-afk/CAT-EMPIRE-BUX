@@ -11,6 +11,7 @@ from app.bot.workflows.ranks import sync_customer_roles
 from app.db.models import Order, User
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
+from app.services.commerce_locks import list_locked_customers, resolve_commerce_lock
 from app.services.orders import OrderStateError, refund_order
 
 
@@ -81,6 +82,27 @@ async def _build_staff_embed(
             embed.add_field(
                 name="Fila de entregas",
                 value="\n".join(lines) if lines else "Nenhuma entrega pendente.",
+                inline=False,
+            )
+
+        if admin:
+            locked = await list_locked_customers(
+                session,
+                guild_id=interaction.guild.id,
+                limit=10,
+            )
+            lines = []
+            for item in locked:
+                provider_state = "/".join(
+                    part for part in (item.provider_status, item.provider_status_detail) if part
+                ) or "revisão manual"
+                lines.append(
+                    f"<@{item.discord_user_id}> • **{provider_state}** • "
+                    f"<t:{int(item.locked_at.timestamp())}:R>"
+                )
+            embed.add_field(
+                name="Contas bloqueadas por pagamento",
+                value="\n".join(lines) if lines else "Nenhuma conta bloqueada.",
                 inline=False,
             )
 
@@ -201,6 +223,92 @@ class RefundOrderView(discord.ui.View):
         self.add_item(RefundOrderSelect(rows))
 
 
+class UnlockReasonModal(discord.ui.Modal, title="Liberar conta para compras"):
+    reason = discord.ui.TextInput(
+        label="Motivo da liberação",
+        placeholder="Ex: contestação resolvida e pagamento validado",
+        style=discord.TextStyle.paragraph,
+        min_length=3,
+        max_length=500,
+    )
+
+    def __init__(self, lock_id: int) -> None:
+        super().__init__()
+        self.lock_id = lock_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not await can_admin(interaction):
+            await interaction.response.send_message("Somente administradores podem liberar contas.", ephemeral=True)
+            return
+
+        reason = str(self.reason).strip()
+        try:
+            async with SessionLocal() as session, session.begin():
+                lock = await resolve_commerce_lock(
+                    session,
+                    lock_id=self.lock_id,
+                    admin_discord_id=interaction.user.id,
+                )
+                if lock.guild_id != interaction.guild.id:
+                    raise ValueError("Bloqueio pertence a outro servidor")
+                user = await session.get(User, lock.user_id)
+                if user is None:
+                    raise ValueError("Cliente do bloqueio não encontrado")
+                await write_audit_log(
+                    session,
+                    guild_id=interaction.guild.id,
+                    actor_discord_id=interaction.user.id,
+                    action="commerce_lock.resolved",
+                    target_type="user",
+                    target_id=str(user.id),
+                    details={
+                        "customer_discord_id": user.discord_user_id,
+                        "reason": reason,
+                        "source_topup_id": str(lock.source_topup_id) if lock.source_topup_id else None,
+                    },
+                )
+                discord_user_id = user.discord_user_id
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"Conta <@{discord_user_id}> liberada para novas compras. "
+            "Nenhum ajuste automático de saldo foi feito.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class CommerceLockSelect(discord.ui.Select):
+    def __init__(self, rows) -> None:
+        options = []
+        for item in rows[:25]:
+            state = "/".join(
+                part for part in (item.provider_status, item.provider_status_detail) if part
+            ) or "revisão manual"
+            options.append(
+                discord.SelectOption(
+                    label=f"Usuário {item.discord_user_id}"[:100],
+                    value=str(item.lock_id),
+                    description=state[:100],
+                )
+            )
+        super().__init__(placeholder="Escolha a conta para revisar", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await can_admin(interaction):
+            await interaction.response.send_message("Somente administradores podem liberar contas.", ephemeral=True)
+            return
+        await interaction.response.send_modal(UnlockReasonModal(int(self.values[0])))
+
+
+class CommerceLockView(discord.ui.View):
+    def __init__(self, rows) -> None:
+        super().__init__(timeout=180)
+        self.add_item(CommerceLockSelect(rows))
+
+
 class StaffPanelView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=300)
@@ -249,6 +357,29 @@ class StaffPanelView(discord.ui.View):
         await interaction.response.send_message(
             "Escolha o pedido. O saldo será devolvido e o ranking/cargo será recalculado.",
             view=RefundOrderView(rows),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Revisar bloqueios", style=discord.ButtonStyle.danger)
+    async def commerce_locks(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        if interaction.guild is None or not await can_admin(interaction):
+            await interaction.response.send_message("Somente administradores podem revisar bloqueios.", ephemeral=True)
+            return
+        async with SessionLocal() as session:
+            rows = await list_locked_customers(
+                session,
+                guild_id=interaction.guild.id,
+                limit=25,
+            )
+        if not rows:
+            await interaction.response.send_message("Não há contas bloqueadas.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Essas contas foram travadas após reembolso/contestação de uma recarga já creditada. "
+            "Revise o caso antes de liberar.",
+            view=CommerceLockView(rows),
             ephemeral=True,
         )
 

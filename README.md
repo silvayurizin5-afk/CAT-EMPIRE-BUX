@@ -52,6 +52,8 @@ https://SEU-DOMINIO/webhooks/mercado-pago
 
 Ative o evento **Order (Mercado Pago)**. O endpoint ainda aceita o evento legado `payment` para recargas antigas criadas pelo fluxo de Preferences.
 
+Se uma recarga já creditada depois receber reembolso total/parcial ou contestação, a NEXTBUY **não força um débito que poderia deixar a carteira negativa**. Em vez disso, bloqueia novas compras daquela conta no servidor, registra o incidente na auditoria e exige revisão manual de um administrador pelo `/staff` → **Revisar bloqueios**.
+
 ## Configuração pelo Discord
 Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.
 
