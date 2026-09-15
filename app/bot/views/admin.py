@@ -3,6 +3,10 @@ from decimal import Decimal, InvalidOperation
 import discord
 from sqlalchemy.exc import IntegrityError
 
+from app.bot.workflows.feedback_permissions import (
+    FeedbackPermissionSyncError,
+    sync_feedback_channel_permissions,
+)
 from app.db.session import SessionLocal
 from app.services.catalog import create_product, upsert_robux_rate, upsert_terms
 from app.services.configs import get_or_create_guild_config
@@ -28,6 +32,15 @@ CHANNEL_FIELDS = {
 }
 
 
+async def _sync_feedback_permissions_after_response(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        return
+    try:
+        await sync_feedback_channel_permissions(interaction.guild)
+    except FeedbackPermissionSyncError as exc:
+        await interaction.followup.send(f"Aviso: {exc}", ephemeral=True)
+
+
 class RolePicker(discord.ui.RoleSelect):
     def __init__(self, field_name: str) -> None:
         super().__init__(placeholder="Escolha o cargo", min_values=1, max_values=1)
@@ -44,6 +57,7 @@ class RolePicker(discord.ui.RoleSelect):
             content=f"Cargo **{ROLE_FIELDS[self.field_name]}** definido como {role.mention}.",
             view=None,
         )
+        await _sync_feedback_permissions_after_response(interaction)
 
 
 class RolePickerView(discord.ui.View):
@@ -76,6 +90,8 @@ class ChannelPicker(discord.ui.ChannelSelect):
             content=f"**{CHANNEL_FIELDS[self.field_name]}** definido como {channel.mention}.",
             view=None,
         )
+        if self.field_name == "feedback_channel_id":
+            await _sync_feedback_permissions_after_response(interaction)
 
 
 class ChannelPickerView(discord.ui.View):
@@ -276,6 +292,7 @@ class RankTierModal(discord.ui.Modal, title="Faixa de cliente"):
             f"Faixa **{tier.name}** configurada a partir de **{tier.min_spend:.2f} créditos**.",
             ephemeral=True,
         )
+        await _sync_feedback_permissions_after_response(interaction)
 
 
 class RankRoleSelect(discord.ui.RoleSelect):

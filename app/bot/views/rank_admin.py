@@ -4,6 +4,10 @@ import discord
 from sqlalchemy.exc import IntegrityError
 
 from app.bot.views.terms_admin import CompleteAdminPanelView
+from app.bot.workflows.feedback_permissions import (
+    FeedbackPermissionSyncError,
+    sync_feedback_channel_permissions,
+)
 from app.db.models import RankTier
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
@@ -12,6 +16,15 @@ from app.services.ranks import (
     set_rank_tier_active,
     upsert_rank_tier,
 )
+
+
+async def _sync_feedback_permissions_after_response(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        return
+    try:
+        await sync_feedback_channel_permissions(interaction.guild)
+    except FeedbackPermissionSyncError as exc:
+        await interaction.followup.send(f"Aviso: {exc}", ephemeral=True)
 
 
 def build_rank_tier_embed(tier: RankTier, guild: discord.Guild | None = None) -> discord.Embed:
@@ -100,6 +113,7 @@ class RankTierEditModal(discord.ui.Modal):
             "Faixa atualizada. Reabra **Gerenciar faixas** para conferir.",
             ephemeral=True,
         )
+        await _sync_feedback_permissions_after_response(interaction)
 
 
 class RankTierActionsView(discord.ui.View):
@@ -142,6 +156,7 @@ class RankTierActionsView(discord.ui.View):
             embed=build_rank_tier_embed(tier, interaction.guild),
             view=RankTierActionsView(tier.id),
         )
+        await _sync_feedback_permissions_after_response(interaction)
 
 
 class RankTierManageSelect(discord.ui.Select):

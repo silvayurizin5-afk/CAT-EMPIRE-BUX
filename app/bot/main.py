@@ -5,6 +5,10 @@ from discord.ext import commands
 
 from app.bot.views.profile import LeaderboardView
 from app.bot.views.store import StoreHomeView
+from app.bot.workflows.feedback_permissions import (
+    FeedbackPermissionSyncError,
+    sync_feedback_channel_permissions,
+)
 from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +21,7 @@ class NextBuyBot(commands.Bot):
         intents.members = True
         intents.message_content = True
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        self._feedback_permissions_synced = False
 
     async def _restore_ticket_views(self) -> None:
         from sqlalchemy import select
@@ -64,6 +69,18 @@ bot = NextBuyBot()
 @bot.event
 async def on_ready() -> None:
     logger.info("NEXTBUY online como %s", bot.user)
+    if bot._feedback_permissions_synced:
+        return
+    for guild in bot.guilds:
+        try:
+            await sync_feedback_channel_permissions(guild)
+        except FeedbackPermissionSyncError as exc:
+            logger.warning(
+                "Não foi possível sincronizar permissões de feedbacks no servidor %s: %s",
+                guild.id,
+                exc,
+            )
+    bot._feedback_permissions_synced = True
 
 
 def run() -> None:

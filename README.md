@@ -54,6 +54,9 @@ Ative o evento **Order (Mercado Pago)**. O endpoint ainda aceita o evento legado
 
 Se uma recarga já creditada depois receber reembolso total/parcial ou contestação, a NEXTBUY **não força um débito que poderia deixar a carteira negativa**. Em vez disso, bloqueia novas compras daquela conta no servidor, registra o incidente na auditoria e exige revisão manual de um administrador pelo `/staff` → **Revisar bloqueios**.
 
+## Canal de feedbacks
+O canal configurado como **Feedbacks** é gerenciado pela NEXTBUY: todos podem visualizar, mas somente o cargo de cliente, faixas de cliente ativas e cargos configurados da staff podem enviar mensagens. A sincronização acontece ao configurar cargos/canal, ao alterar faixas e na inicialização do bot. Como o canal é dedicado a feedbacks, a sincronização substitui os overwrites do canal para evitar permissões antigas deixando usuários indevidos escreverem.
+
 ## Configuração pelo Discord
 Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.
 
