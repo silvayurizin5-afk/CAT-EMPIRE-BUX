@@ -125,8 +125,8 @@ async def due_dm_reminders(
 ) -> list[tuple[FeedbackReminder, Order, User, GuildConfig]]:
     rows = await session.execute(
         select(FeedbackReminder, Order, User, GuildConfig)
-        .join(Order, Order.id == FedbackReminder.order_id)
-        .join(User, User.id == FedbackReminder.user_id)
+        .join(Order, Order.id == FeedbackReminder.order_id)
+        .join(User, User.id == FeedbackReminder.user_id)
         .join(GuildConfig, GuildConfig.guild_id == Order.guild_id)
         .outerjoin(Feedback, Feedback.order_id == Order.id)
         .where(

@@ -1,6 +1,6 @@
 # NEXTBUY
 
-Loja automatizada para Discord com créditos internos, pagamentos Mercado Pago, tickets, transcripts, entregas, feedbacks, cargos e ranking.
+Loja automatizada para Discord com créditos internos, Mercado Pago, tickets, transcripts, entregas, feedbacks, cargos, ranking, calculadora de Robux e FAQ automático.
 
 ## Stack
 - Python 3.12+
@@ -13,9 +13,37 @@ Loja automatizada para Discord com créditos internos, pagamentos Mercado Pago, 
 ## Regras principais
 - Cliente não usa slash commands: compra por embeds, botões, selects e modais.
 - Slash commands são restritos à staff.
-- 1 BRL = 1 crédito, com centavos.
+- 1 BRL = 1 crédito, com suporte a centavos.
 - Dinheiro usa `Decimal`/`NUMERIC`, nunca `float`.
-- Crédito só entra após webhook validado e idempotente.
-- Segredos ficam fora do Git (`.env`).
+- Recarga só credita depois de webhook autenticado e idempotente.
+- Segredos ficam fora do Git em variáveis de ambiente.
+- Ranking e cargos de cliente usam apenas compras confirmadas do servidor atual.
 
-Veja `docs/PROJECT_SPEC.md`.
+## Desenvolvimento local
+
+```bash
+python -m venv .venv
+# ative o ambiente virtual
+pip install -e ".[dev]"
+cp .env.example .env
+alembic upgrade head
+```
+
+API:
+
+```bash
+uvicorn app.api.main:app --reload
+```
+
+Bot:
+
+```bash
+python -m app.bot.main
+```
+
+## Configuração pelo Discord
+Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.
+
+O canal de calculadora entende valores como `10,80` como reais/créditos e mensagens como `380 Robux` como quantidade de Robux. O canal de FAQ responde por palavras-chave configuradas pela staff.
+
+Veja `docs/PROJECT_SPEC.md` para o escopo completo.

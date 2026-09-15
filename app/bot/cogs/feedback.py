@@ -83,7 +83,7 @@ class FeedbackCog(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 continue
             try:
-                sent = await channel.send(
+                await channel.send(
                     (
                         f"<@{user.discord_user_id}> quando puder, avalie o pedido "
                         f"`{str(order.id)[:8]}`. Comece a mensagem com **1 a 5** e escreva seu feedback."

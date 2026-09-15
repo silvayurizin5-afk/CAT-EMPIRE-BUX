@@ -1,4 +1,5 @@
 import logging
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.services.topups import TopUpValidationError, process_approved_payment
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="NEXTBUY API", version="0.2.0")
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 @app.get("/health")
@@ -21,7 +23,7 @@ async def health() -> dict[str, str]:
 @app.post("/webhooks/mercado-pago")
 async def mercado_pago_webhook(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: SessionDep,
 ) -> dict[str, str]:
     body = await request.json()
     data_id = request.query_params.get("data.id") or str((body.get("data") or {}).get("id") or "")
