@@ -39,6 +39,7 @@ class NextBuyBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.load_extension("app.bot.cogs.admin")
+        await self.load_extension("app.bot.cogs.staff")
         await self.load_extension("app.bot.cogs.feedback")
         await self.load_extension("app.bot.cogs.automation")
         self.add_view(StoreHomeView())
