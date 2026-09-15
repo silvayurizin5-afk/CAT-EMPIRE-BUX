@@ -73,30 +73,48 @@ async def submit_feedback(
     return feedback
 
 
+async def list_pending_orders_for_feedback(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    discord_user_id: int,
+    limit: int = 25,
+) -> list[tuple[Order, User, FeedbackReminder]]:
+    rows = await session.execute(
+        select(Order, User, FeedbackReminder)
+        .join(User, User.id == Order.user_id)
+        .join(FeedbackReminder, FeedbackReminder.order_id == Order.id)
+        .outerjoin(Feedback, Feedback.order_id == Order.id)
+        .where(
+            Order.guild_id == guild_id,
+            User.discord_user_id == discord_user_id,
+            Order.status == "delivered",
+            Feedback.id.is_(None),
+            FeedbackReminder.completed_at.is_(None),
+        )
+        .order_by(FeedbackReminder.due_at.asc(), Order.created_at.asc())
+        .limit(max(1, min(limit, 100)))
+    )
+    return list(rows.all())
+
+
 async def find_pending_order_for_feedback(
     session: AsyncSession,
     *,
     guild_id: int,
     discord_user_id: int,
+    order_prefix: str | None = None,
 ) -> tuple[Order, User, FeedbackReminder] | None:
-    row = (
-        await session.execute(
-            select(Order, User, FeedbackReminder)
-            .join(User, User.id == Order.user_id)
-            .join(FeedbackReminder, FeedbackReminder.order_id == Order.id)
-            .outerjoin(Feedback, Feedback.order_id == Order.id)
-            .where(
-                Order.guild_id == guild_id,
-                User.discord_user_id == discord_user_id,
-                Order.status == "delivered",
-                Feedback.id.is_(None),
-                FeedbackReminder.completed_at.is_(None),
-            )
-            .order_by(FeedbackReminder.due_at.asc())
-            .limit(1)
-        )
-    ).first()
-    return row if row is not None else None
+    rows = await list_pending_orders_for_feedback(
+        session,
+        guild_id=guild_id,
+        discord_user_id=discord_user_id,
+    )
+    if order_prefix:
+        prefix = order_prefix.strip().lower()
+        matches = [row for row in rows if str(row[0].id).lower().startswith(prefix)]
+        return matches[0] if len(matches) == 1 else None
+    return rows[0] if len(rows) == 1 else None
 
 
 async def due_channel_reminders(
