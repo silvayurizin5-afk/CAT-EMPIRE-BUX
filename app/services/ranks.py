@@ -8,6 +8,18 @@ from app.core.money import money
 from app.db.models import RankTier
 
 
+async def list_all_rank_tiers(session: AsyncSession, *, guild_id: int) -> list[RankTier]:
+    return list(
+        (
+            await session.scalars(
+                select(RankTier)
+                .where(RankTier.guild_id == guild_id)
+                .order_by(RankTier.active.desc(), RankTier.min_spend.asc(), RankTier.id.asc())
+            )
+        ).all()
+    )
+
+
 async def list_rank_tiers(session: AsyncSession, *, guild_id: int) -> list[RankTier]:
     return list(
         (
@@ -18,6 +30,17 @@ async def list_rank_tiers(session: AsyncSession, *, guild_id: int) -> list[RankT
             )
         ).all()
     )
+
+
+async def set_rank_tier_active(
+    session: AsyncSession,
+    *,
+    tier: RankTier,
+    active: bool,
+) -> RankTier:
+    tier.active = active
+    await session.flush()
+    return tier
 
 
 async def upsert_rank_tier(
