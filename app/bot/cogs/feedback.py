@@ -70,10 +70,7 @@ class FeedbackCog(commands.Cog):
                 matches = [
                     row for row in pending_rows if str(row[0].id).lower().startswith(order_prefix)
                 ]
-                if len(matches) != 1:
-                    pending = None
-                else:
-                    pending = matches[0]
+                pending = matches[0] if len(matches) == 1 else None
             elif len(pending_rows) == 1:
                 pending = pending_rows[0]
             else:
@@ -99,10 +96,10 @@ class FeedbackCog(commands.Cog):
                 )
             else:
                 examples = ", ".join(f"`#{str(row[0].id)[:8]}`" for row in pending_rows[:5])
+                first_short_id = str(pending_rows[0][0].id)[:8]
                 guidance = (
                     "Você tem mais de uma avaliação pendente. Informe o pedido, por exemplo: "
-                    f"`5 {str(pending_rows[0][0].id)[:8].join(['#', ''])} - ótimo atendimento`. "
-                    f"Pendentes: {examples}."
+                    f"`5 #{first_short_id} - ótimo atendimento`. Pendentes: {examples}."
                 )
             try:
                 await message.reply(guidance, mention_author=False, delete_after=25)
