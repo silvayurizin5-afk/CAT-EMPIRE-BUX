@@ -4,12 +4,13 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.db.models import CreditTopUp, User, WalletTransaction
+from app.db.models import CreditTopUp, Order, OrderItem, RobuxRate, User, WalletTransaction
 from app.db.payment_models import TopUpNotification
+from app.services.orders import create_robux_order
 from app.services.topups import process_approved_payment
 from app.services.users import get_or_create_user
 from app.services.wallets import InsufficientCreditsError, apply_wallet_transaction, get_balance
@@ -169,5 +170,63 @@ async def test_payment_confirmation_is_idempotent_under_concurrency() -> None:
             assert tx_count == 1
             assert notification_count == 1
     finally:
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_robux_order_uses_current_locked_rate_not_stale_object() -> None:
+    engine, sessions = _database()
+    guild_id = 987654321
+    rate_code = f"test-{uuid4().hex[:12]}"
+    async with sessions() as session, session.begin():
+        user = await get_or_create_user(session, _discord_id())
+        user_id = user.id
+        rate = RobuxRate(
+            guild_id=guild_id,
+            code=rate_code,
+            label="Teste Robux",
+            price_per_robux=Decimal("0.050000"),
+            delivery_label="Teste",
+            active=True,
+        )
+        session.add(rate)
+        await session.flush()
+        rate_id = rate.id
+        stale_rate = rate
+
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(RobuxRate)
+            .where(RobuxRate.id == rate_id)
+            .values(price_per_robux=Decimal("0.060000"), label="Teste atualizado")
+        )
+
+    order_id = None
+    try:
+        async with sessions() as session, session.begin():
+            order = await create_robux_order(
+                session,
+                guild_id=guild_id,
+                user_id=user_id,
+                rate=stale_rate,
+                robux=100,
+            )
+            order_id = order.id
+
+        async with sessions() as session:
+            order = await session.get(Order, order_id)
+            item = await session.scalar(select(OrderItem).where(OrderItem.order_id == order_id))
+            assert order is not None
+            assert item is not None
+            assert order.total_credits == Decimal("6.00")
+            assert item.name_snapshot == "Teste atualizado • 100 Robux"
+            assert item.metadata_json["price_per_robux"] == "0.060000"
+    finally:
+        async with sessions() as session, session.begin():
+            if order_id is not None:
+                await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
+                await session.execute(delete(Order).where(Order.id == order_id))
+            await session.execute(delete(RobuxRate).where(RobuxRate.id == rate_id))
         await _delete_user(sessions, user_id)
         await engine.dispose()
