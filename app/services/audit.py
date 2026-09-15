@@ -126,6 +126,6 @@ async def release_audit_delivery(
     )
     if delivery is None or delivery.published_at is not None:
         return
-    delivery.claimed_at = None
+    delivery.claimed_at = datetime.now(UTC)
     delivery.last_error = error[:1000]
     await session.flush()
