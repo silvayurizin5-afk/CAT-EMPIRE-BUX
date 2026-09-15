@@ -4,6 +4,15 @@ from discord.ext import commands
 
 from app.bot.checks import can_admin
 from app.bot.views.admin import AdminPanelView
+from app.bot.views.product_admin import send_product_management
+
+
+class FullAdminPanelView(AdminPanelView):
+    @discord.ui.button(label="Gerenciar produtos", style=discord.ButtonStyle.secondary)
+    async def manage_products(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await send_product_management(interaction)
 
 
 class AdminCog(commands.Cog):
@@ -20,9 +29,7 @@ class AdminCog(commands.Cog):
             title="NEXTBUY • Administração",
             description="Configure a loja sem encher o Discord de comandos.",
         )
-        await interaction.response.send_message(embed=embed, view=AdminPanelView(), ephemeral=True)
-
-
+        await interaction.response.send_message(embed=embed, view=FullAdminPanelView(), ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

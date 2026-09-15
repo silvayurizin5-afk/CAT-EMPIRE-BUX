@@ -21,6 +21,19 @@ async def list_active_products(
     return list((await session.scalars(stmt)).all())
 
 
+async def list_products(session: AsyncSession, *, guild_id: int, limit: int = 25) -> list[Product]:
+    return list(
+        (
+            await session.scalars(
+                select(Product)
+                .where(Product.guild_id == guild_id)
+                .order_by(Product.active.desc(), Product.sort_order, Product.name)
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
 async def list_product_types(session: AsyncSession, *, guild_id: int) -> list[str]:
     rows = await session.scalars(
         select(Product.product_type)
@@ -52,6 +65,42 @@ async def create_product(
         description=description.strip(),
     )
     session.add(product)
+    await session.flush()
+    return product
+
+
+async def update_product_presentation(
+    session: AsyncSession,
+    *,
+    product: Product,
+    price_credits: Decimal | None,
+    description: str,
+    image_url: str | None,
+    emoji: str | None,
+    delivery_mode: str,
+) -> Product:
+    normalized_delivery = delivery_mode.strip().lower() or "manual"
+    if normalized_delivery not in {"manual", "instant", "scheduled"}:
+        raise ValueError("Modo de entrega deve ser manual, instant ou scheduled")
+    if price_credits is not None and price_credits < 0:
+        raise ValueError("Preço não pode ser negativo")
+
+    product.price_credits = money(price_credits) if price_credits is not None else None
+    product.description = description.strip()
+    product.image_url = (image_url or "").strip() or None
+    product.emoji = (emoji or "").strip() or None
+    product.delivery_mode = normalized_delivery
+    await session.flush()
+    return product
+
+
+async def set_product_active(
+    session: AsyncSession,
+    *,
+    product: Product,
+    active: bool,
+) -> Product:
+    product.active = active
     await session.flush()
     return product
 
