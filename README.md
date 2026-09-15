@@ -57,6 +57,13 @@ Se uma recarga já creditada depois receber reembolso total/parcial ou contesta�
 ## Canal de feedbacks
 O canal configurado como **Feedbacks** é gerenciado pela NEXTBUY: todos podem visualizar, mas somente o cargo de cliente, faixas de cliente ativas e cargos configurados da staff podem enviar mensagens. A sincronização acontece ao configurar cargos/canal, ao alterar faixas e na inicialização do bot. Como o canal é dedicado a feedbacks, a sincronização substitui os overwrites do canal para evitar permissões antigas deixando usuários indevidos escreverem.
 
+## FAQ automático
+As respostas automáticas usam palavras-chave normalizadas, cooldown por usuário e podem ter até **5 botões de link HTTPS**. Depois de criar uma resposta no `/admin`, abra **FAQ**, escolha a resposta e use **Botões**. Cada linha segue:
+
+```text
+Nome do botão | https://exemplo.com | emoji opcional
+```
+
 ## Configuração pelo Discord
 Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.
 

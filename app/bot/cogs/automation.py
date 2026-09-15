@@ -3,10 +3,12 @@ import time
 import discord
 from discord.ext import commands
 
+from app.bot.views.faq_links import AutoReplyLinkView
 from app.db.session import SessionLocal
 from app.services.calculator import CalculationKind, parse_calculation_message
 from app.services.configs import get_or_create_guild_config
 from app.services.faq import find_auto_reply
+from app.services.faq_buttons import list_auto_reply_buttons
 from app.services.quotes import quote_credits_for_robux, quote_robux_from_credits
 
 
@@ -74,8 +76,9 @@ class AutomationCog(commands.Cog):
                 guild_id=message.guild.id,
                 message=message.content,
             )
-        if reply is None:
-            return
+            if reply is None:
+                return
+            buttons = await list_auto_reply_buttons(session, auto_reply_id=reply.id)
 
         key = (message.guild.id, message.author.id, reply.id)
         now = time.monotonic()
@@ -86,7 +89,8 @@ class AutomationCog(commands.Cog):
 
         title = f"{reply.emoji} {reply.title}" if reply.emoji else reply.title
         embed = discord.Embed(title=title, description=reply.content)
-        await message.channel.send(embed=embed)
+        view = AutoReplyLinkView(buttons) if buttons else None
+        await message.channel.send(embed=embed, view=view)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

@@ -7,6 +7,12 @@ from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
 from app.services.catalog import upsert_robux_rate
 from app.services.faq import list_auto_replies, set_auto_reply_active, upsert_auto_reply
+from app.services.faq_buttons import (
+    list_auto_reply_buttons,
+    parse_auto_reply_buttons,
+    serialize_auto_reply_buttons,
+    set_auto_reply_buttons,
+)
 from app.services.quotes import list_robux_rates, set_robux_rate_active
 
 
@@ -194,6 +200,11 @@ def build_auto_reply_embed(reply: AutoReply) -> discord.Embed:
     embed.add_field(name="Título", value=reply.title[:1024], inline=False)
     keywords = ", ".join(str(item) for item in (reply.keywords or []))
     embed.add_field(name="Palavras-chave", value=keywords[:1024] or "—", inline=False)
+    embed.add_field(
+        name="Botões",
+        value="Use **Botões** para configurar até 5 links HTTPS.",
+        inline=False,
+    )
     if reply.emoji:
         embed.set_footer(text=f"Emoji: {reply.emoji}")
     return embed
@@ -297,6 +308,58 @@ class AutoReplyEditModal(discord.ui.Modal):
         )
 
 
+class AutoReplyButtonsModal(discord.ui.Modal, title="Botões da resposta automática"):
+    buttons_input = discord.ui.TextInput(
+        label="Botões (um por linha)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=3000,
+        placeholder="Suporte | https://exemplo.com/suporte | 🎫",
+    )
+
+    def __init__(self, reply_id: int, current_value: str) -> None:
+        super().__init__()
+        self.reply_id = reply_id
+        self.buttons_input.default = current_value[:3000]
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        try:
+            parsed = parse_auto_reply_buttons(str(self.buttons_input))
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        async with SessionLocal() as session, session.begin():
+            reply = await session.get(AutoReply, self.reply_id)
+            if reply is None or reply.guild_id != interaction.guild.id:
+                await interaction.response.send_message(
+                    "Resposta automática não encontrada.", ephemeral=True
+                )
+                return
+            saved = await set_auto_reply_buttons(
+                session,
+                auto_reply_id=reply.id,
+                buttons=parsed,
+            )
+            await write_audit_log(
+                session,
+                guild_id=interaction.guild.id,
+                actor_discord_id=interaction.user.id,
+                action="faq.buttons.update",
+                target_type="auto_reply",
+                target_id=str(reply.id),
+                details={"name": reply.name, "button_count": len(saved)},
+            )
+
+        await interaction.response.send_message(
+            f"Botões atualizados: **{len(saved)}**. "
+            "Formato: `Nome | https://link | emoji opcional`.",
+            ephemeral=True,
+        )
+
+
 class AutoReplyActionsView(discord.ui.View):
     def __init__(self, reply_id: int) -> None:
         super().__init__(timeout=180)
@@ -314,6 +377,22 @@ class AutoReplyActionsView(discord.ui.View):
             )
             return
         await interaction.response.send_modal(AutoReplyEditModal(reply))
+
+    @discord.ui.button(label="Botões", style=discord.ButtonStyle.secondary)
+    async def buttons(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if interaction.guild is None:
+            return
+        async with SessionLocal() as session:
+            reply = await session.get(AutoReply, self.reply_id)
+            if reply is None or reply.guild_id != interaction.guild.id:
+                await interaction.response.send_message(
+                    "Resposta automática não encontrada.", ephemeral=True
+                )
+                return
+            current = await list_auto_reply_buttons(session, auto_reply_id=reply.id)
+        await interaction.response.send_modal(
+            AutoReplyButtonsModal(reply.id, serialize_auto_reply_buttons(current))
+        )
 
     @discord.ui.button(label="Ativar/Desativar", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -393,7 +472,7 @@ async def send_auto_reply_management(interaction: discord.Interaction) -> None:
         )
         return
     await interaction.response.send_message(
-        "Escolha uma resposta automática para editar ou ativar/desativar:",
+        "Escolha uma resposta automática para editar, configurar botões ou ativar/desativar:",
         view=AutoReplyManagementView(replies),
         ephemeral=True,
     )
