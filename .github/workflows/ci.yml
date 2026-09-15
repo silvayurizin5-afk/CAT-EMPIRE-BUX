@@ -37,4 +37,6 @@ jobs:
         run: alembic upgrade head --sql > /tmp/nextbuy-migrations.sql
       - name: Apply migrations to PostgreSQL
         run: alembic upgrade head
+      - name: Detect schema drift
+        run: alembic check
       - run: pytest -q
