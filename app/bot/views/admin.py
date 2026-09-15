@@ -6,6 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from app.db.session import SessionLocal
 from app.services.catalog import create_product, upsert_robux_rate, upsert_terms
 from app.services.configs import get_or_create_guild_config
+from app.services.faq import upsert_auto_reply
+from app.services.ranks import upsert_rank_tier
 
 ROLE_FIELDS = {
     "admin_role_id": "Administrador",
@@ -20,6 +22,8 @@ CHANNEL_FIELDS = {
     "deliveries_channel_id": "Entregas",
     "feedback_channel_id": "Feedbacks",
     "calculator_channel_id": "Calculadora",
+    "faq_channel_id": "FAQ automático",
+    "leaderboard_channel_id": "Ranking",
     "logs_channel_id": "Logs",
 }
 
@@ -195,6 +199,99 @@ class TermsModal(discord.ui.Modal, title="Criar/atualizar termo"):
         )
 
 
+class AutoReplyModal(discord.ui.Modal, title="Resposta automática"):
+    name = discord.ui.TextInput(label="Nome", placeholder="Pagamento Pix", max_length=80)
+    keywords = discord.ui.TextInput(
+        label="Palavras-chave",
+        placeholder="pix, pagamento, aceita pix",
+        max_length=500,
+    )
+    title_text = discord.ui.TextInput(label="Título do embed", max_length=160)
+    content = discord.ui.TextInput(
+        label="Resposta",
+        style=discord.TextStyle.paragraph,
+        max_length=4000,
+    )
+    emoji = discord.ui.TextInput(label="Emoji", required=False, max_length=128)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        keywords = [item.strip() for item in str(self.keywords).replace("\n", ",").split(",")]
+        try:
+            async with SessionLocal() as session, session.begin():
+                reply = await upsert_auto_reply(
+                    session,
+                    guild_id=interaction.guild.id,
+                    name=str(self.name),
+                    keywords=keywords,
+                    title=str(self.title_text),
+                    content=str(self.content),
+                    emoji=str(self.emoji),
+                )
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Resposta automática **{reply.name}** salva.", ephemeral=True
+        )
+
+
+class RankTierModal(discord.ui.Modal, title="Faixa de cliente"):
+    name = discord.ui.TextInput(label="Nome", placeholder="SFAQ", max_length=80)
+    min_spend = discord.ui.TextInput(label="Meta em créditos", placeholder="5000,00", max_length=20)
+    dm_message = discord.ui.TextInput(
+        label="Mensagem ao atingir a meta",
+        required=False,
+        style=discord.TextStyle.paragraph,
+        max_length=1200,
+    )
+
+    def __init__(self, role_id: int) -> None:
+        super().__init__()
+        self.role_id = role_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        try:
+            min_spend = Decimal(str(self.min_spend).replace(",", "."))
+        except InvalidOperation:
+            await interaction.response.send_message("Meta inválida.", ephemeral=True)
+            return
+        try:
+            async with SessionLocal() as session, session.begin():
+                tier = await upsert_rank_tier(
+                    session,
+                    guild_id=interaction.guild.id,
+                    name=str(self.name),
+                    min_spend=min_spend,
+                    role_id=self.role_id,
+                    dm_message=str(self.dm_message),
+                )
+        except (ValueError, IntegrityError) as exc:
+            await interaction.response.send_message(f"Não foi possível salvar: {exc}", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Faixa **{tier.name}** configurada a partir de **{tier.min_spend:.2f} créditos**.",
+            ephemeral=True,
+        )
+
+
+class RankRoleSelect(discord.ui.RoleSelect):
+    def __init__(self) -> None:
+        super().__init__(placeholder="Escolha o cargo da faixa", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RankTierModal(self.values[0].id))
+
+
+class RankRoleView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=120)
+        self.add_item(RankRoleSelect())
+
+
 class AdminPanelView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=300)
@@ -223,6 +320,18 @@ class AdminPanelView(discord.ui.View):
     async def terms(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await interaction.response.send_modal(TermsModal())
 
+    @discord.ui.button(label="Auto-resposta", style=discord.ButtonStyle.primary)
+    async def auto_reply(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.send_modal(AutoReplyModal())
+
+    @discord.ui.button(label="Faixa de cliente", style=discord.ButtonStyle.primary)
+    async def rank_tier(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.send_message(
+            "Escolha o cargo que representa esta faixa:",
+            view=RankRoleView(),
+            ephemeral=True,
+        )
+
     @discord.ui.button(label="Publicar loja", style=discord.ButtonStyle.success)
     async def publish_store(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.channel is None:
@@ -239,3 +348,17 @@ class AdminPanelView(discord.ui.View):
         )
         await interaction.channel.send(embed=embed, view=StoreHomeView())
         await interaction.response.send_message("Painel publicado neste canal.", ephemeral=True)
+
+    @discord.ui.button(label="Publicar ranking", style=discord.ButtonStyle.success)
+    async def publish_ranking(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if interaction.guild is None or interaction.channel is None:
+            await interaction.response.send_message("Canal inválido.", ephemeral=True)
+            return
+        from app.bot.workflows.leaderboard import refresh_leaderboard
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        message = await refresh_leaderboard(interaction.guild, channel=interaction.channel)
+        if message is None:
+            await interaction.followup.send("Não consegui publicar o ranking.", ephemeral=True)
+            return
+        await interaction.followup.send("Ranking publicado e vinculado para atualização automática.", ephemeral=True)

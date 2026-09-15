@@ -87,6 +87,9 @@ class GuildConfig(Base, TimestampMixin):
     deliveries_channel_id: Mapped[int | None] = mapped_column(BigInteger)
     feedback_channel_id: Mapped[int | None] = mapped_column(BigInteger)
     calculator_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    faq_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    leaderboard_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    leaderboard_message_id: Mapped[int | None] = mapped_column(BigInteger)
     logs_channel_id: Mapped[int | None] = mapped_column(BigInteger)
     feedback_emoji: Mapped[str] = mapped_column(String(128), default="🐱", server_default="🐱")
     feedback_reminder_minutes: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
@@ -230,6 +233,7 @@ class RankTier(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("guild_id", "role_id", name="uq_rank_tier_guild_role"),
+        UniqueConstraint("guild_id", "name", name="uq_rank_tier_guild_name"),
         CheckConstraint("min_spend >= 0", name="ck_rank_tier_min_spend_non_negative"),
     )
 
@@ -277,6 +281,11 @@ class AutoReply(Base, TimestampMixin):
     emoji: Mapped[str | None] = mapped_column(String(128))
     cooldown_seconds: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    __table_args__ = (
+        UniqueConstraint("guild_id", "name", name="uq_auto_reply_guild_name"),
+        CheckConstraint("cooldown_seconds >= 0", name="ck_auto_reply_cooldown_non_negative"),
+    )
 
 
 class AuditLog(Base):

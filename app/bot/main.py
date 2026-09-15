@@ -3,6 +3,7 @@ import logging
 import discord
 from discord.ext import commands
 
+from app.bot.views.profile import LeaderboardView
 from app.bot.views.store import StoreHomeView
 from app.core.config import settings
 
@@ -39,7 +40,9 @@ class NextBuyBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.load_extension("app.bot.cogs.admin")
         await self.load_extension("app.bot.cogs.feedback")
+        await self.load_extension("app.bot.cogs.automation")
         self.add_view(StoreHomeView())
+        self.add_view(LeaderboardView())
         await self._restore_ticket_views()
         if settings.discord_guild_id:
             guild = discord.Object(id=settings.discord_guild_id)

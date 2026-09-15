@@ -33,6 +33,12 @@ async def create_product_order(
     order = Order(guild_id=guild_id, user_id=user_id, total_credits=total, status="pending")
     session.add(order)
     await session.flush()
+
+    metadata = dict(product.metadata_json or {})
+    metadata.setdefault("game_name", product.game_name)
+    metadata.setdefault("product_type", product.product_type)
+    metadata.setdefault("product_slug", product.slug)
+
     session.add(
         OrderItem(
             order_id=order.id,
@@ -41,7 +47,7 @@ async def create_product_order(
             unit_price=unit_price,
             quantity=quantity,
             image_url_snapshot=product.image_url,
-            metadata_json=product.metadata_json,
+            metadata_json=metadata,
         )
     )
     await session.flush()

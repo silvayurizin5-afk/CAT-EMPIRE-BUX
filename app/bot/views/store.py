@@ -2,6 +2,10 @@ import asyncio
 from decimal import Decimal, InvalidOperation
 
 import discord
+
+from app.bot.views.profile import build_profile_embed
+from app.bot.workflows.leaderboard import refresh_leaderboard
+from app.bot.workflows.ranks import sync_customer_roles
 from app.bot.workflows.tickets import open_order_ticket
 from app.db.models import Product, TermsDocument
 from app.db.session import SessionLocal
@@ -112,6 +116,11 @@ class ConfirmPurchaseView(discord.ui.View):
                     view=None,
                 )
                 return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if member is not None:
+            await sync_customer_roles(member)
+        await refresh_leaderboard(interaction.guild)
 
         ticket = await open_order_ticket(interaction, order_id=order.id)
         ticket_text = ticket.mention if ticket is not None else "ticket pendente de configuração"
@@ -270,15 +279,10 @@ class StoreHomeView(discord.ui.View):
                 guild_id=interaction.guild.id,
                 discord_user_id=interaction.user.id,
             )
-        embed = discord.Embed(title=f"Perfil de {interaction.user.display_name}")
-        embed.add_field(name="Saldo", value=f"{profile.balance:.2f} créditos")
-        embed.add_field(name="Total gasto", value=f"{profile.total_spent:.2f} créditos")
-        embed.add_field(name="Compras", value=str(profile.completed_orders))
-        embed.add_field(
-            name="Posição",
-            value=f"#{profile.leaderboard_position}" if profile.leaderboard_position else "Sem ranking",
+        await interaction.response.send_message(
+            embed=build_profile_embed(interaction.user.display_name, profile),
+            ephemeral=True,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(
         label="Termos",
