@@ -10,6 +10,7 @@ from app.bot.workflows.transcripts import render_channel_transcript
 from app.db.models import GuildConfig, Order, OrderItem, User
 from app.db.session import SessionLocal
 from app.services.feedback import schedule_feedback_reminder, submit_feedback
+from app.services.feedback_cards import render_feedback_card
 from app.services.orders import mark_order_delivered
 
 
@@ -98,7 +99,7 @@ async def open_order_ticket(
 
     category = None
     if config and config.ticket_category_id:
-        candidate = guild.get_channel(config.tickket_category_id)
+        candidate = guild.get_channel(config.ticket_category_id)
         if isinstance(candidate, discord.CategoryChannel):
             category = candidate
 
@@ -165,7 +166,7 @@ class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
         style=discord.TextStyle.paragraph,
         min_length=2,
         max_length=1000,
-   )
+    )
 
     def __init__(self, *, order_id: UUID, stars: int) -> None:
         super().__init__()
@@ -197,14 +198,26 @@ class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
         if config and config.feedback_channel_id:
             channel = interaction.guild.get_channel(config.feedback_channel_id)
             if isinstance(channel, discord.TextChannel):
-                embed = discord.Embed(
-                    title="Compra verificada",
-                    description=feedback.comment,
+                avatar_bytes: bytes | None = None
+                try:
+                    avatar_bytes = await interaction.user.display_avatar.read()
+                except discord.HTTPException:
+                    pass
+                card_bytes = render_feedback_card(
+                    customer_name=interaction.user.display_name,
+                    stars=feedback.stars,
+                    comment=feedback.comment,
+                    order_short_id=str(self.order_id)[:8],
+                    avatar_bytes=avatar_bytes,
                 )
-                embed.add_field(name="Cliente", value=interaction.user.mention)
-                embed.add_field(name="Nota", value="⭐" * feedback.stars)
-                embed.add_field(name="Pedido", value=f"`{str(self.order_id)[:8]}`")
-                published = await channel.send(embed=embed)
+                filename = f"feedback-{str(self.order_id)[:8]}.png"
+                file = discord.File(io.BytesIO(card_bytes), filename=filename)
+                embed = discord.Embed(
+                    title="Feedback de compra verificada",
+                    description=f"{interaction.user.mention} • {'⭐' * feedback.stars}",
+                )
+                embed.set_image(url=f"attachment://{filename}")
+                published = await channel.send(embed=embed, file=file)
                 async with SessionLocal() as session, session.begin():
                     db_feedback = await session.get(type(feedback), feedback.id)
                     if db_feedback is not None:
@@ -250,7 +263,11 @@ class TicketStaffView(discord.ui.View):
         self.delivered.custom_id = f"nextbuy:ticket:{suffix}:delivered"
         self.close.custom_id = f"nextbuy:ticket:{suffix}:close"
 
-    @discord.ui.button(label="Em atendimento", style=discord.ButtonStyle.secondary, custom_id="ticket:processing")
+    @discord.ui.button(
+        label="Em atendimento",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ticket:processing",
+    )
     async def processing(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if not await can_support(interaction) and not await can_deliver(interaction):
             await interaction.response.send_message("Sem permissão.", ephemeral=True)
@@ -264,7 +281,11 @@ class TicketStaffView(discord.ui.View):
                 order.status = "processing"
         await interaction.response.send_message("Pedido marcado como em atendimento.", ephemeral=True)
 
-    @discord.ui.button(label="Marcar entregue", style=discord.ButtonStyle.success, custom_id="ticket:delivered")
+    @discord.ui.button(
+        label="Marcar entregue",
+        style=discord.ButtonStyle.success,
+        custom_id="ticket:delivered",
+    )
     async def delivered(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None or not await can_deliver(interaction):
             await interaction.response.send_message("Sem permissão de entrega.", ephemeral=True)
@@ -286,7 +307,11 @@ class TicketStaffView(discord.ui.View):
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
 
-    @discord.ui.button(label="Fechar ticket", style=discord.ButtonStyle.danger, custom_id="ticket:close")
+    @discord.ui.button(
+        label="Fechar ticket",
+        style=discord.ButtonStyle.danger,
+        custom_id="ticket:close",
+    )
     async def close(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None or not await can_support(interaction):
             await interaction.response.send_message("Sem permissão.", ephemeral=True)
