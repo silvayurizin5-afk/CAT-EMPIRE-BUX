@@ -56,11 +56,13 @@ class PaymentNotificationsCog(commands.Cog):
                     )
                 return
 
+        provider_name = "Stripe" if item.provider == "stripe" else "Mercado Pago"
         note: str | None = None
         try:
             await user.send(
                 "Pagamento confirmado na **NEXTBUY**.\n"
                 f"Foram adicionados **{item.credits_amount:.2f} créditos** ao seu saldo.\n"
+                f"Gateway: **{provider_name}**\n"
                 f"Recarga: `{item.topup_id[:8]}`"
             )
         except discord.Forbidden:
@@ -83,7 +85,9 @@ class PaymentNotificationsCog(commands.Cog):
             if isinstance(channel, discord.TextChannel):
                 embed = discord.Embed(
                     title="Pagamento confirmado",
-                    description=f"Recarga `{item.topup_id[:8]}` aprovada pelo Mercado Pago.",
+                    description=(
+                        f"Recarga `{item.topup_id[:8]}` aprovada pelo **{provider_name}**."
+                    ),
                 )
                 embed.add_field(name="Cliente", value=f"<@{item.discord_user_id}>")
                 embed.add_field(name="Créditos", value=f"{item.credits_amount:.2f}")

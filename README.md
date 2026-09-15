@@ -1,6 +1,6 @@
 # NEXTBUY
 
-Loja automatizada para Discord com créditos internos, Mercado Pago, tickets, transcripts, entregas, feedbacks, cargos, ranking, calculadora de Robux e FAQ automático.
+Loja automatizada para Discord com créditos internos, Stripe, tickets, transcripts, entregas, feedbacks, cargos, ranking, calculadora de Robux e FAQ automático.
 
 ## Stack
 - Python 3.12+
@@ -8,16 +8,18 @@ Loja automatizada para Discord com créditos internos, Mercado Pago, tickets, tr
 - FastAPI
 - PostgreSQL
 - SQLAlchemy 2 + Alembic
-- Mercado Pago
+- Stripe Checkout + webhooks
 
 ## Regras principais
 - Cliente não usa slash commands: compra por embeds, botões, selects e modais.
 - Slash commands são restritos à staff.
 - 1 BRL = 1 crédito, com suporte a centavos.
 - Dinheiro usa `Decimal`/`NUMERIC`, nunca `float`.
-- Recarga só credita depois de webhook autenticado e idempotente.
+- Recarga só credita depois de webhook Stripe autenticado e idempotente.
+- Dados de cartão não passam pelo Discord nem pelo backend da NEXTBUY; o checkout é hospedado pela Stripe.
 - Segredos ficam fora do Git em variáveis de ambiente.
 - Ranking e cargos de cliente usam apenas compras confirmadas do servidor atual.
+- O endpoint legado do Mercado Pago permanece apenas para finalizar recargas antigas já criadas antes da migração.
 
 ## Desenvolvimento local
 
@@ -41,28 +43,27 @@ Bot:
 python -m app.bot.main
 ```
 
-## Mercado Pago
-As novas recargas usam **Checkout Pro via Orders API**. O backend cria uma order com chave de idempotência, recebe o `checkout_url` e só adiciona créditos depois de consultar a order autenticada e confirmar `processed/accredited` com valor e moeda esperados.
-
-No painel do Mercado Pago, configure a URL HTTPS:
+## Stripe
+Configure no ambiente:
 
 ```text
-https://SEU-DOMINIO/webhooks/mercado-pago
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_CREDITS_PRODUCT_ID=prod_...
+PUBLIC_BASE_URL=https://seu-dominio-publico
 ```
 
-Ative o evento **Order (Mercado Pago)**. O endpoint ainda aceita o evento legado `payment` para recargas antigas criadas pelo fluxo de Preferences.
+Webhook esperado: `POST /webhooks/stripe`.
 
-Se uma recarga já creditada depois receber reembolso total/parcial ou contestação, a NEXTBUY **não força um débito que poderia deixar a carteira negativa**. Em vez disso, bloqueia novas compras daquela conta no servidor, registra o incidente na auditoria e exige revisão manual de um administrador pelo `/staff` → **Revisar bloqueios**.
+Eventos usados pelo sistema:
+- `checkout.session.completed`
+- `checkout.session.async_payment_succeeded`
+- `checkout.session.async_payment_failed`
+- `checkout.session.expired`
+- `charge.refunded`
+- `charge.dispute.created`
 
-## Canal de feedbacks
-O canal configurado como **Feedbacks** é gerenciado pela NEXTBUY: todos podem visualizar, mas somente o cargo de cliente, faixas de cliente ativas e cargos configurados da staff podem enviar mensagens. A sincronização acontece ao configurar cargos/canal, ao alterar faixas e na inicialização do bot. Como o canal é dedicado a feedbacks, a sincronização substitui os overwrites do canal para evitar permissões antigas deixando usuários indevidos escreverem.
-
-## FAQ automático
-As respostas automáticas usam palavras-chave normalizadas, cooldown por usuário e podem ter até **5 botões de link HTTPS**. Depois de criar uma resposta no `/admin`, abra **FAQ**, escolha a resposta e use **Botões**. Cada linha segue:
-
-```text
-Nome do botão | https://exemplo.com | emoji opcional
-```
+O Checkout usa métodos de pagamento dinâmicos da Stripe. Os métodos realmente exibidos dependem do que estiver habilitado e disponível para a conta/região.
 
 ## Configuração pelo Discord
 Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.

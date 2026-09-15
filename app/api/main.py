@@ -2,12 +2,19 @@ import logging
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import verify_mercado_pago_signature
 from app.db.session import get_session
 from app.integrations.mercado_pago import MercadoPagoClient, MercadoPagoError
+from app.integrations.stripe_gateway import StripeWebhookError, verify_stripe_event
+from app.services.stripe_topups import (
+    StripeTopUpValidationError,
+    process_stripe_checkout_event,
+    process_stripe_incident_event,
+)
 from app.services.topups import (
     TopUpValidationError,
     process_approved_payment,
@@ -15,13 +22,90 @@ from app.services.topups import (
 )
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="NEXTBUY API", version="0.3.0")
+app = FastAPI(title="NEXTBUY API", version="0.4.0")
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "nextbuy-api"}
+    return {"status": "ok", "service": "nextbuy-api", "payment_gateway": "stripe"}
+
+
+@app.get("/payments/success", response_class=HTMLResponse)
+async def payment_success() -> str:
+    return (
+        "<!doctype html><html><body style='font-family:sans-serif;background:#111;color:#fff;"
+        "display:grid;place-items:center;min-height:100vh'>"
+        "<main><h1>Pagamento recebido</h1>"
+        "<p>Você pode voltar para o Discord. Os créditos entram após a confirmação da Stripe.</p>"
+        "</main></body></html>"
+    )
+
+
+@app.get("/payments/cancel", response_class=HTMLResponse)
+async def payment_cancel() -> str:
+    return (
+        "<!doctype html><html><body style='font-family:sans-serif;background:#111;color:#fff;"
+        "display:grid;place-items:center;min-height:100vh'>"
+        "<main><h1>Pagamento cancelado</h1>"
+        "<p>Nenhum crédito foi adicionado. Você pode voltar para o Discord e tentar novamente.</p>"
+        "</main></body></html>"
+    )
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(
+    request: Request,
+    session: SessionDep,
+) -> dict[str, str]:
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    secret = settings.stripe_webhook_secret.get_secret_value()
+    try:
+        event = verify_stripe_event(
+            payload=payload,
+            signature_header=signature,
+            secret=secret,
+            tolerance_seconds=settings.webhook_signature_tolerance_seconds,
+        )
+    except StripeWebhookError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signature") from exc
+
+    event_type = str(event.get("type") or "")
+    data = event.get("data") or {}
+    resource = data.get("object") if isinstance(data, dict) else None
+    if not isinstance(resource, dict):
+        return {"status": "ignored"}
+
+    checkout_events = {
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+        "checkout.session.async_payment_failed",
+        "checkout.session.expired",
+    }
+    incident_events = {"charge.refunded", "charge.dispute.created"}
+    if event_type not in checkout_events | incident_events:
+        return {"status": "ignored"}
+
+    try:
+        async with session.begin():
+            if event_type in checkout_events:
+                topup = await process_stripe_checkout_event(
+                    session,
+                    event_type=event_type,
+                    checkout=resource,
+                )
+            else:
+                topup = await process_stripe_incident_event(
+                    session,
+                    event_type=event_type,
+                    resource=resource,
+                )
+    except StripeTopUpValidationError as exc:
+        logger.warning("Webhook Stripe rejeitado: %s", exc)
+        raise HTTPException(status_code=400, detail="invalid stripe event") from exc
+
+    return {"status": "processed" if topup else "ignored"}
 
 
 @app.post("/webhooks/mercado-pago")
@@ -29,6 +113,7 @@ async def mercado_pago_webhook(
     request: Request,
     session: SessionDep,
 ) -> dict[str, str]:
+    """Compatibilidade temporária para recargas antigas criadas no Mercado Pago."""
     try:
         body = await request.json()
     except ValueError as exc:
@@ -69,7 +154,7 @@ async def mercado_pago_webhook(
             else:
                 topup = await process_approved_payment(session, payment=provider_resource)
     except TopUpValidationError as exc:
-        logger.warning("Webhook rejeitado: %s", exc)
+        logger.warning("Webhook legado do Mercado Pago rejeitado: %s", exc)
         raise HTTPException(status_code=400, detail="invalid payment") from exc
     except MercadoPagoError as exc:
         logger.exception("Falha ao consultar Mercado Pago")

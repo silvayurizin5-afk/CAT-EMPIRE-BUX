@@ -15,15 +15,17 @@ NEXTBUY é uma loja automatizada dentro do Discord. A experiência do cliente é
 - Nunca usar float em dinheiro.
 - Toda alteração de saldo gera transação de ledger auditável.
 - Compra só debita se houver saldo suficiente.
-- Recarga só credita após confirmação real do provedor.
+- Recarga só credita após confirmação real do gateway.
 
 ## Pagamentos
-- Mercado Pago como integração inicial.
-- Pix e cartão.
-- Pix por QR Code/copia e cola quando suportado pela API.
-- Webhook persistente e idempotente.
-- O usuário nunca informa dados de cartão dentro do Discord.
-- Não armazenar dados sensíveis de pagamento.
+- Stripe é o gateway principal.
+- Checkout hospedado pela Stripe; a NEXTBUY não coleta nem armazena dados de cartão.
+- Métodos de pagamento são dinâmicos e dependem do que estiver habilitado/disponível na conta Stripe e na região.
+- O bot cria Checkout Sessions de pagamento único para recargas de valor variável.
+- O saldo só é creditado após webhook Stripe autenticado e idempotente.
+- Eventos de pagamento assíncrono também precisam ser tratados antes de liberar saldo.
+- Reembolso ou contestação depois de uma recarga creditada bloqueia novas compras para revisão manual; o sistema não força saldo negativo automaticamente.
+- O endpoint do Mercado Pago fica temporariamente apenas para concluir recargas legadas criadas antes da migração para Stripe.
 
 ## Loja
 - Painéis enviados pela staff.
@@ -93,11 +95,12 @@ NEXTBUY é uma loja automatizada dentro do Discord. A experiência do cliente é
 - PostgreSQL em produção.
 - SQLAlchemy 2 assíncrono e Alembic.
 - Operações de carteira e compra devem ser transacionais.
-- Webhooks devem ter validação de autenticidade e idempotência.
+- Webhooks Stripe devem validar assinatura sobre o corpo bruto da requisição.
+- IDs de Stripe e referências de pagamento precisam de idempotência e vínculo inequívoco com a recarga.
 - IDs de Discord, emojis, textos, canais, cargos, taxas e regras devem ser configuráveis.
 - Código modular; evitar `main.py` gigante.
 
-## Módulos planejados
+## Módulos principais
 - bot/admin
 - bot/store
 - bot/tickets
@@ -108,19 +111,16 @@ NEXTBUY é uma loja automatizada dentro do Discord. A experiência do cliente é
 - bot/terms
 - bot/profile
 - bot/leaderboard
-- services/payments
+- services/stripe_topups
 - services/wallet
 - services/orders
 - services/transcripts
 - api/webhooks
 - db/models + migrations
 
-## Próximas etapas
-1. Banco + migrations.
-2. Configuração do servidor e permissões da staff.
-3. Ledger de créditos e pedidos.
-4. Integração Mercado Pago segura.
-5. Painéis de loja.
-6. Tickets/entregas/transcripts.
-7. Feedbacks, cargos, ranking, calculadora, FAQ e termos.
-8. Testes de concorrência, idempotência e permissões.
+## Validação
+- Testes de concorrência da carteira.
+- Idempotência de confirmação de recarga.
+- Proteção contra duplicidade de pagamento.
+- Testes de permissões e RBAC.
+- Alembic aplicado em PostgreSQL no CI e verificação de schema drift.

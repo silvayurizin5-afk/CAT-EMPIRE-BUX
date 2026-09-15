@@ -16,6 +16,7 @@ class PendingTopUpNotification:
     guild_id: int
     discord_user_id: int
     credits_amount: Decimal
+    provider: str
 
 
 async def claim_pending_topup_notifications(
@@ -56,6 +57,7 @@ async def claim_pending_topup_notifications(
                 guild_id=topup.guild_id,
                 discord_user_id=user.discord_user_id,
                 credits_amount=topup.credits_amount,
+                provider=topup.provider,
             )
         )
     await session.flush()

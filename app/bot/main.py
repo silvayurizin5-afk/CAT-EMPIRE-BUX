@@ -48,6 +48,7 @@ class NextBuyBot(commands.Bot):
         await self.load_extension("app.bot.cogs.feedback")
         await self.load_extension("app.bot.cogs.automation")
         await self.load_extension("app.bot.cogs.payments")
+        await self.load_extension("app.bot.cogs.stripe_payments")
         await self.load_extension("app.bot.cogs.ticket_automation")
         await self.load_extension("app.bot.cogs.audit_logs")
         self.add_view(StoreHomeView())
