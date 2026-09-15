@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from app.bot.checks import can_admin
+from app.bot.views.embed_builder import EmbedBuilderLauncherButton
 from app.bot.views.rank_admin import FullAdminPanelView
 
 
@@ -16,13 +17,37 @@ class AdminCog(commands.Cog):
         if not await can_admin(interaction):
             await interaction.response.send_message("Você não tem acesso ao painel.", ephemeral=True)
             return
+
         embed = discord.Embed(
-            title="NEXTBUY • Administração",
-            description="Configure a loja sem encher o Discord de comandos.",
+            title="🛠️ NEXTBUY • Administração",
+            description=(
+                "Central de configuração da loja. Use os botões abaixo para criar, editar "
+                "e publicar tudo sem espalhar comandos pelo servidor."
+            ),
+            color=discord.Color.blurple(),
         )
+        embed.add_field(
+            name="🛍️ Loja",
+            value="Produtos, cotações, termos, ranking e painéis.",
+            inline=True,
+        )
+        embed.add_field(
+            name="🤖 Automação",
+            value="FAQ, feedbacks, tickets, canais e cargos.",
+            inline=True,
+        )
+        embed.add_field(
+            name="✨ Criação visual",
+            value="Monte embeds com prévia ao vivo, imagens, campos e botões.",
+            inline=False,
+        )
+        embed.set_footer(text="NEXTBUY • Alterações valem para este servidor")
+
+        view = FullAdminPanelView()
+        view.add_item(EmbedBuilderLauncherButton())
         await interaction.response.send_message(
             embed=embed,
-            view=FullAdminPanelView(),
+            view=view,
             ephemeral=True,
         )
 

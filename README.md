@@ -68,6 +68,8 @@ O Checkout usa métodos de pagamento dinâmicos da Stripe. Os métodos realmente
 ## Configuração pelo Discord
 Use `/admin`. O painel concentra configuração de cargos, canais, produtos, cotações de Robux, termos, respostas automáticas, faixas de cliente, publicação da loja e publicação do ranking.
 
+O botão **Criar embed** abre um editor visual com prévia ao vivo para título, descrição, cor, autor, campos, imagem/thumbnail, rodapé e botões de link, com publicação no canal atual ou em outro canal.
+
 O canal de calculadora entende valores como `10,80` como reais/créditos e mensagens como `380 Robux` como quantidade de Robux. O canal de FAQ responde por palavras-chave configuradas pela staff.
 
 Veja `docs/PROJECT_SPEC.md` para o escopo completo.
