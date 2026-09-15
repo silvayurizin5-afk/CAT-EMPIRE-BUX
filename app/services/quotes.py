@@ -22,6 +22,39 @@ async def list_active_robux_rates(
     )
 
 
+async def list_robux_rates(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    limit: int = 25,
+) -> list[RobuxRate]:
+    return list(
+        (
+            await session.scalars(
+                select(RobuxRate)
+                .where(RobuxRate.guild_id == guild_id)
+                .order_by(
+                    RobuxRate.active.desc(),
+                    RobuxRate.sort_order,
+                    RobuxRate.id,
+                )
+                .limit(max(1, min(limit, 100)))
+            )
+        ).all()
+    )
+
+
+async def set_robux_rate_active(
+    session: AsyncSession,
+    *,
+    rate: RobuxRate,
+    active: bool,
+) -> RobuxRate:
+    rate.active = active
+    await session.flush()
+    return rate
+
+
 async def quote_robux_from_credits(
     session: AsyncSession, *, guild_id: int, credits: Decimal
 ) -> list[tuple[RobuxRate, int]]:

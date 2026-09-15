@@ -2,6 +2,7 @@ import discord
 import pytest
 
 from app.bot.views.admin_feedback import ExtendedAdminPanelView
+from app.bot.views.automation_admin import AutoReplyActionsView, RobuxRateActionsView
 from app.bot.views.product_admin import ProductActionsView
 from app.bot.views.terms_gate import TermsGateView, build_terms_required_embed
 from app.db.models import TermsDocument
@@ -24,6 +25,8 @@ async def test_extended_admin_panel_keeps_base_actions() -> None:
     assert "Publicar loja" in labels
     assert "Publicar ranking" in labels
     assert "Gerenciar produtos" in labels
+    assert "Cotações" in labels
+    assert "FAQ" in labels
     assert "Feedbacks" in labels
     view.stop()
 
@@ -36,6 +39,17 @@ async def test_product_admin_exposes_stock_management() -> None:
     assert "Estoque" in labels
     assert "Ativar/Desativar" in labels
     view.stop()
+
+
+@pytest.mark.asyncio
+async def test_automation_admin_exposes_edit_and_toggle() -> None:
+    rate_view = RobuxRateActionsView(rate_id=1)
+    reply_view = AutoReplyActionsView(reply_id=1)
+    for view in (rate_view, reply_view):
+        labels = _button_labels(view)
+        assert "Editar" in labels
+        assert "Ativar/Desativar" in labels
+        view.stop()
 
 
 @pytest.mark.asyncio

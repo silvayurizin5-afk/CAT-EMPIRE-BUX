@@ -68,6 +68,35 @@ async def upsert_auto_reply(
     return reply
 
 
+async def list_auto_replies(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    limit: int = 25,
+) -> list[AutoReply]:
+    return list(
+        (
+            await session.scalars(
+                select(AutoReply)
+                .where(AutoReply.guild_id == guild_id)
+                .order_by(AutoReply.active.desc(), AutoReply.name, AutoReply.id)
+                .limit(max(1, min(limit, 100)))
+            )
+        ).all()
+    )
+
+
+async def set_auto_reply_active(
+    session: AsyncSession,
+    *,
+    reply: AutoReply,
+    active: bool,
+) -> AutoReply:
+    reply.active = active
+    await session.flush()
+    return reply
+
+
 async def find_auto_reply(
     session: AsyncSession, *, guild_id: int, message: str
 ) -> AutoReply | None:

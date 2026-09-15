@@ -145,6 +145,22 @@ class ExtendedAdminPanelView(AdminPanelView):
 
         await send_product_management(interaction)
 
+    @discord.ui.button(label="Cotações", style=discord.ButtonStyle.primary)
+    async def manage_robux_rates(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        from app.bot.views.automation_admin import send_robux_rate_management
+
+        await send_robux_rate_management(interaction)
+
+    @discord.ui.button(label="FAQ", style=discord.ButtonStyle.primary)
+    async def manage_auto_replies(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        from app.bot.views.automation_admin import send_auto_reply_management
+
+        await send_auto_reply_management(interaction)
+
     @discord.ui.button(label="Feedbacks", style=discord.ButtonStyle.primary)
     async def feedback_settings(
         self, interaction: discord.Interaction, _: discord.ui.Button
