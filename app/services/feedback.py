@@ -109,6 +109,7 @@ async def due_channel_reminders(
         .join(GuildConfig, GuildConfig.guild_id == Order.guild_id)
         .outerjoin(Feedback, Feedback.order_id == Order.id)
         .where(
+            Order.status == "delivered",
             FeedbackReminder.completed_at.is_(None),
             FeedbackReminder.channel_mention_sent_at.is_(None),
             FeedbackReminder.due_at <= now,
@@ -130,6 +131,7 @@ async def due_dm_reminders(
         .join(GuildConfig, GuildConfig.guild_id == Order.guild_id)
         .outerjoin(Feedback, Feedback.order_id == Order.id)
         .where(
+            Order.status == "delivered",
             FeedbackReminder.completed_at.is_(None),
             FeedbackReminder.channel_mention_sent_at.is_not(None),
             FeedbackReminder.dm_sent_at.is_(None),

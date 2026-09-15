@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import money, require_positive
-from app.db.models import Order, OrderItem, Product, RobuxRate, User
+from app.db.models import FeedbackReminder, Order, OrderItem, Product, RobuxRate, User
 from app.services.wallets import apply_wallet_transaction
 
 
@@ -155,6 +155,13 @@ async def refund_order(session: AsyncSession, *, order_id: UUID, reason: str) ->
     user = await session.scalar(select(User).where(User.id == order.user_id).with_for_update())
     if user is not None:
         user.total_spent = max(money("0"), money(user.total_spent - order.total_credits))
+
+    reminder = await session.scalar(
+        select(FeedbackReminder).where(FeedbackReminder.order_id == order.id).with_for_update()
+    )
+    if reminder is not None and reminder.completed_at is None:
+        reminder.completed_at = datetime.now(UTC)
+
     order.status = "refunded"
     await session.flush()
     return order
