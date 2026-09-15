@@ -8,6 +8,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/nextbuy_test
+      RUN_DB_TESTS: "1"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nextbuy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nextbuy_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,4 +35,6 @@ jobs:
       - run: ruff check .
       - name: Validate Alembic migrations
         run: alembic upgrade head --sql > /tmp/nextbuy-migrations.sql
+      - name: Apply migrations to PostgreSQL
+        run: alembic upgrade head
       - run: pytest -q
