@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from app.bot.checks import can_admin
-from app.bot.views.ticket_admin import FinalAdminPanelView
+from app.bot.views.terms_admin import CompleteAdminPanelView
 
 
 class AdminCog(commands.Cog):
@@ -22,7 +22,7 @@ class AdminCog(commands.Cog):
         )
         await interaction.response.send_message(
             embed=embed,
-            view=FinalAdminPanelView(),
+            view=CompleteAdminPanelView(),
             ephemeral=True,
         )
 
