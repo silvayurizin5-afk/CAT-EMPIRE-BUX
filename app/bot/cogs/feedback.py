@@ -10,14 +10,27 @@ from app.db.session import SessionLocal
 from app.services.feedback import (
     due_channel_reminders,
     due_dm_reminders,
-    find_pending_order_for_feedback,
+    list_pending_orders_for_feedback,
     submit_feedback,
 )
 
 FEEDBACK_RE = re.compile(
-    r"^\s*([1-5])(?:\s*(?:/\s*5|estrelas?|stars?|⭐+))?\s*[-:–—]?\s*(.+)$",
+    r"^\s*([1-5])(?:\s*(?:/\s*5|estrelas?|stars?|⭐+))?"
+    r"(?:\s+#([0-9a-f]{8}))?\s*[-:–—]?\s*(.+)$",
     re.IGNORECASE | re.DOTALL,
 )
+
+
+def parse_feedback_message(content: str) -> tuple[int, str | None, str] | None:
+    match = FEEDBACK_RE.match(content)
+    if match is None:
+        return None
+    stars = int(match.group(1))
+    order_prefix = match.group(2).lower() if match.group(2) else None
+    comment = match.group(3).strip()
+    if not comment:
+        return None
+    return stars, order_prefix, comment
 
 
 class FeedbackCog(commands.Cog):
@@ -39,30 +52,64 @@ class FeedbackCog(commands.Cog):
         if config is None or config.feedback_channel_id != message.channel.id:
             return
 
-        match = FEEDBACK_RE.match(message.content)
-        if match is None:
+        parsed = parse_feedback_message(message.content)
+        if parsed is None:
             return
-        stars = int(match.group(1))
-        comment = match.group(2).strip()
+        stars, order_prefix, comment = parsed
 
         async with SessionLocal() as session, session.begin():
-            pending = await find_pending_order_for_feedback(
+            pending_rows = await list_pending_orders_for_feedback(
                 session,
                 guild_id=message.guild.id,
                 discord_user_id=message.author.id,
             )
-            if pending is None:
+            if not pending_rows:
                 return
-            order, user, _ = pending
-            await submit_feedback(
-                session,
-                order_id=order.id,
-                user_id=user.id,
-                stars=stars,
-                comment=comment,
-                source="channel",
-                published_message_id=message.id,
-            )
+
+            if order_prefix:
+                matches = [
+                    row for row in pending_rows if str(row[0].id).lower().startswith(order_prefix)
+                ]
+                if len(matches) != 1:
+                    pending = None
+                else:
+                    pending = matches[0]
+            elif len(pending_rows) == 1:
+                pending = pending_rows[0]
+            else:
+                pending = None
+
+            if pending is not None:
+                order, user, _ = pending
+                await submit_feedback(
+                    session,
+                    order_id=order.id,
+                    user_id=user.id,
+                    stars=stars,
+                    comment=comment,
+                    source="channel",
+                    published_message_id=message.id,
+                )
+
+        if pending is None:
+            if order_prefix:
+                guidance = (
+                    "Não achei um único pedido pendente com esse código. "
+                    "Use o código de 8 caracteres mostrado no lembrete."
+                )
+            else:
+                examples = ", ".join(f"`#{str(row[0].id)[:8]}`" for row in pending_rows[:5])
+                guidance = (
+                    "Você tem mais de uma avaliação pendente. Informe o pedido, por exemplo: "
+                    f"`5 {str(pending_rows[0][0].id)[:8].join(['#', ''])} - ótimo atendimento`. "
+                    f"Pendentes: {examples}."
+                )
+            try:
+                await message.reply(guidance, mention_author=False, delete_after=25)
+            except discord.HTTPException:
+                pass
+            return
+
         try:
             await message.add_reaction(config.feedback_emoji or "🐱")
         except discord.HTTPException:
@@ -82,11 +129,13 @@ class FeedbackCog(commands.Cog):
             channel = guild.get_channel(config.feedback_channel_id)
             if not isinstance(channel, discord.TextChannel):
                 continue
+            short_id = str(order.id)[:8]
             try:
                 await channel.send(
                     (
                         f"<@{user.discord_user_id}> quando puder, avalie o pedido "
-                        f"`{str(order.id)[:8]}`. Comece a mensagem com **1 a 5** e escreva seu feedback."
+                        f"`{short_id}`. Use **1 a 5 - seu feedback**. "
+                        f"Se tiver mais de um pendente, use **5 #{short_id} - seu feedback**."
                     ),
                     allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
@@ -104,9 +153,11 @@ class FeedbackCog(commands.Cog):
                     discord_user = await self.bot.fetch_user(user.discord_user_id)
                 except discord.NotFound:
                     continue
+            short_id = str(order.id)[:8]
             try:
                 await discord_user.send(
-                    f"Você ainda tem uma avaliação pendente do pedido `{str(order.id)[:8]}` na NEXTBUY."
+                    f"Você ainda tem uma avaliação pendente do pedido `{short_id}` na NEXTBUY. "
+                    f"No canal de feedbacks, você pode usar `5 #{short_id} - seu feedback`."
                 )
             except discord.Forbidden:
                 pass
