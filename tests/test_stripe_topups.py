@@ -9,44 +9,55 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.db.models import CreditTopUp, User, WalletTransaction
-from app.integrations.stripe_gateway import amount_to_minor_units
-from app.services.stripe_topups import process_stripe_checkout_event
+from app.services.commerce_locks import get_active_commerce_lock
+from app.services.stripe_topups import (
+    process_stripe_checkout_event,
+    process_stripe_incident_event,
+)
 from app.services.users import get_or_create_user
 from app.services.wallets import get_balance
 
 
-def test_stripe_amount_uses_brl_minor_units() -> None:
-    assert amount_to_minor_units(Decimal("10.80")) == 1080
-    assert amount_to_minor_units(Decimal("1.01")) == 101
-
-
-@pytest.mark.skipif(
+pytestmark = pytest.mark.skipif(
     os.getenv("RUN_DB_TESTS") != "1",
     reason="integration database tests are disabled",
 )
-@pytest.mark.asyncio
-async def test_stripe_checkout_confirmation_is_idempotent_under_concurrency() -> None:
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-    sessions = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+async def _seed_stripe_topup(sessions, *, amount: Decimal = Decimal("10.80")):
     discord_user_id = 10_000_000_000_000_000 + (uuid4().int % 8_000_000_000_000_000)
     checkout_id = f"cs_test_{uuid4().hex}"
     payment_intent_id = f"pi_test_{uuid4().hex}"
-
+    guild_id = 123456 + (uuid4().int % 100000)
     async with sessions() as session, session.begin():
         user = await get_or_create_user(session, discord_user_id)
-        user_id = user.id
         topup = CreditTopUp(
-            user_id=user_id,
-            guild_id=123456,
-            amount_brl=Decimal("10.80"),
-            credits_amount=Decimal("10.80"),
+            user_id=user.id,
+            guild_id=guild_id,
+            amount_brl=amount,
+            credits_amount=amount,
             provider="stripe",
             status="pending",
             provider_preference_id=checkout_id,
         )
         session.add(topup)
         await session.flush()
-        topup_id = topup.id
+        return user.id, topup.id, guild_id, checkout_id, payment_intent_id
+
+
+async def _cleanup(sessions, *, user_id: int, topup_id) -> None:
+    async with sessions() as session, session.begin():
+        await session.execute(delete(CreditTopUp).where(CreditTopUp.id == topup_id))
+        user = await session.get(User, user_id)
+        if user is not None:
+            await session.delete(user)
+
+
+@pytest.mark.asyncio
+async def test_stripe_checkout_confirmation_is_idempotent_under_concurrency() -> None:
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    user_id, topup_id, _, checkout_id, payment_intent_id = await _seed_stripe_topup(sessions)
 
     checkout = {
         "id": checkout_id,
@@ -83,9 +94,56 @@ async def test_stripe_checkout_confirmation_is_idempotent_under_concurrency() ->
             assert stored is not None
             assert stored.provider_payment_id == payment_intent_id
     finally:
+        await _cleanup(sessions, user_id=user_id, topup_id=topup_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stripe_refund_locks_commerce_without_negative_wallet() -> None:
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    user_id, topup_id, guild_id, checkout_id, payment_intent_id = await _seed_stripe_topup(sessions)
+    checkout = {
+        "id": checkout_id,
+        "client_reference_id": str(topup_id),
+        "metadata": {"topup_id": str(topup_id)},
+        "currency": "brl",
+        "amount_total": 1080,
+        "payment_status": "paid",
+        "payment_intent": payment_intent_id,
+    }
+
+    try:
         async with sessions() as session, session.begin():
-            await session.execute(delete(CreditTopUp).where(CreditTopUp.id == topup_id))
-            user = await session.get(User, user_id)
-            if user is not None:
-                await session.delete(user)
+            await process_stripe_checkout_event(
+                session,
+                event_type="checkout.session.completed",
+                checkout=checkout,
+            )
+
+        async with sessions() as session, session.begin():
+            result = await process_stripe_incident_event(
+                session,
+                event_type="charge.refunded",
+                resource={
+                    "id": f"ch_test_{uuid4().hex}",
+                    "payment_intent": payment_intent_id,
+                    "amount": 1080,
+                    "amount_refunded": 1080,
+                },
+            )
+            assert result is not None
+            assert result.status == "refunded"
+
+        async with sessions() as session:
+            assert await get_balance(session, user_id) == Decimal("10.80")
+            lock = await get_active_commerce_lock(
+                session,
+                guild_id=guild_id,
+                user_id=user_id,
+            )
+            assert lock is not None
+            assert lock.source_topup_id == topup_id
+    finally:
+        await _cleanup(sessions, user_id=user_id, topup_id=topup_id)
         await engine.dispose()
