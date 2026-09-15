@@ -9,6 +9,7 @@ from app.bot.checks import can_deliver, can_support
 from app.bot.workflows.transcripts import render_channel_transcript
 from app.db.models import GuildConfig, Order, OrderItem, User
 from app.db.session import SessionLocal
+from app.services.audit import write_audit_log
 from app.services.feedback import schedule_feedback_reminder, submit_feedback
 from app.services.feedback_cards import render_feedback_card
 from app.services.orders import mark_order_delivered
@@ -114,6 +115,18 @@ async def open_order_ticket(
         db_order = await session.get(Order, order.id)
         if db_order is not None:
             db_order.ticket_channel_id = channel.id
+            await write_audit_log(
+                session,
+                guild_id=guild.id,
+                actor_discord_id=interaction.user.id,
+                action="ticket.open",
+                target_type="order",
+                target_id=str(order.id),
+                details={
+                    "channel_id": channel.id,
+                    "customer_discord_id": user.discord_user_id,
+                },
+            )
 
     lines = "\n".join(f"• {item.name_snapshot} × {item.quantity}" for item in items)
     embed = discord.Embed(
@@ -269,16 +282,29 @@ class TicketStaffView(discord.ui.View):
         custom_id="ticket:processing",
     )
     async def processing(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if interaction.guild is None:
+            return
         if not await can_support(interaction) and not await can_deliver(interaction):
             await interaction.response.send_message("Sem permissão.", ephemeral=True)
             return
         async with SessionLocal() as session, session.begin():
-            order = await session.get(Order, self.order_id)
+            order = await session.scalar(
+                select(Order).where(Order.id == self.order_id).with_for_update()
+            )
             if order is None:
                 await interaction.response.send_message("Pedido não encontrado.", ephemeral=True)
                 return
             if order.status == "paid":
                 order.status = "processing"
+                await write_audit_log(
+                    session,
+                    guild_id=interaction.guild.id,
+                    actor_discord_id=interaction.user.id,
+                    action="order.processing",
+                    target_type="order",
+                    target_id=str(order.id),
+                    details={"channel_id": interaction.channel_id},
+                )
         await interaction.response.send_message("Pedido marcado como em atendimento.", ephemeral=True)
 
     @discord.ui.button(
@@ -291,6 +317,9 @@ class TicketStaffView(discord.ui.View):
             await interaction.response.send_message("Sem permissão de entrega.", ephemeral=True)
             return
         async with SessionLocal() as session, session.begin():
+            before = await session.scalar(
+                select(Order.status).where(Order.id == self.order_id).with_for_update()
+            )
             order = await mark_order_delivered(session, order_id=self.order_id)
             config = await session.scalar(
                 select(GuildConfig).where(GuildConfig.guild_id == interaction.guild.id)
@@ -298,6 +327,19 @@ class TicketStaffView(discord.ui.View):
             delay = config.feedback_reminder_minutes if config else 5
             await schedule_feedback_reminder(session, order=order, delay_minutes=delay)
             user = await session.get(User, order.user_id)
+            if before != "delivered":
+                await write_audit_log(
+                    session,
+                    guild_id=interaction.guild.id,
+                    actor_discord_id=interaction.user.id,
+                    action="order.delivered",
+                    target_type="order",
+                    target_id=str(order.id),
+                    details={
+                        "channel_id": interaction.channel_id,
+                        "customer_discord_id": user.discord_user_id if user else None,
+                    },
+                )
         await publish_delivery(interaction.guild, order_id=self.order_id)
         await interaction.response.send_message("Entrega registrada.", ephemeral=True)
         if isinstance(interaction.channel, discord.TextChannel) and user is not None:
@@ -338,8 +380,23 @@ class TicketStaffView(discord.ui.View):
             member = interaction.guild.get_member(user.discord_user_id)
             if member:
                 await interaction.channel.set_permissions(member, send_messages=False, view_channel=True)
+        was_closed = interaction.channel.name.startswith("closed-")
         new_name = interaction.channel.name
-        if not new_name.startswith("closed-"):
+        if not was_closed:
             new_name = f"closed-{new_name}"[:100]
         await interaction.channel.edit(name=new_name, reason="NEXTBUY: ticket fechado")
+        if not was_closed:
+            async with SessionLocal() as session, session.begin():
+                await write_audit_log(
+                    session,
+                    guild_id=interaction.guild.id,
+                    actor_discord_id=interaction.user.id,
+                    action="ticket.close",
+                    target_type="order",
+                    target_id=str(self.order_id),
+                    details={
+                        "channel_id": interaction.channel.id,
+                        "transcript_saved": bool(config and config.transcript_channel_id),
+                    },
+                )
         await interaction.followup.send("Ticket fechado e transcript processado.", ephemeral=True)
