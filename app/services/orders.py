@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import money, require_positive
 from app.db.models import FeedbackReminder, Order, OrderItem, Product, RobuxRate, User
+from app.services.audit import write_audit_log
 from app.services.wallets import apply_wallet_transaction
 
 
@@ -133,6 +134,18 @@ async def pay_order_with_credits(session: AsyncSession, *, order_id: UUID) -> Or
     user.total_spent = money(user.total_spent + order.total_credits)
     order.status = "paid"
     order.paid_at = datetime.now(UTC)
+    await write_audit_log(
+        session,
+        guild_id=order.guild_id,
+        actor_discord_id=user.discord_user_id,
+        action="order.purchase",
+        target_type="order",
+        target_id=str(order.id),
+        details={
+            "amount": str(order.total_credits),
+            "customer_discord_id": user.discord_user_id,
+        },
+    )
     await session.flush()
     return order
 
