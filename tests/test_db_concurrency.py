@@ -5,10 +5,11 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.config import settings
 from app.db.models import CreditTopUp, User, WalletTransaction
 from app.db.payment_models import TopUpNotification
-from app.db.session import SessionLocal
 from app.services.topups import process_approved_payment
 from app.services.users import get_or_create_user
 from app.services.wallets import InsufficientCreditsError, apply_wallet_transaction, get_balance
@@ -23,8 +24,14 @@ def _discord_id() -> int:
     return 10_000_000_000_000_000 + (uuid4().int % 8_000_000_000_000_000)
 
 
-async def _delete_user(user_id: int) -> None:
-    async with SessionLocal() as session, session.begin():
+def _database():
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    return engine, sessions
+
+
+async def _delete_user(sessions, user_id: int) -> None:
+    async with sessions() as session, session.begin():
         await session.execute(delete(CreditTopUp).where(CreditTopUp.user_id == user_id))
         user = await session.get(User, user_id)
         if user is not None:
@@ -33,8 +40,9 @@ async def _delete_user(user_id: int) -> None:
 
 @pytest.mark.asyncio
 async def test_wallet_prevents_concurrent_overspend() -> None:
+    engine, sessions = _database()
     reference_prefix = f"test:{uuid4()}"
-    async with SessionLocal() as session, session.begin():
+    async with sessions() as session, session.begin():
         user = await get_or_create_user(session, _discord_id())
         user_id = user.id
         await apply_wallet_transaction(
@@ -46,7 +54,7 @@ async def test_wallet_prevents_concurrent_overspend() -> None:
         )
 
     async def debit(suffix: str):
-        async with SessionLocal() as session, session.begin():
+        async with sessions() as session, session.begin():
             return await apply_wallet_transaction(
                 session,
                 user_id=user_id,
@@ -62,16 +70,18 @@ async def test_wallet_prevents_concurrent_overspend() -> None:
         assert len(successes) == 1
         assert len(failures) == 1
 
-        async with SessionLocal() as session:
+        async with sessions() as session:
             assert await get_balance(session, user_id) == Decimal("20.00")
     finally:
-        await _delete_user(user_id)
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_wallet_reference_is_idempotent_across_sessions() -> None:
+    engine, sessions = _database()
     shared_reference = f"test:{uuid4()}:same"
-    async with SessionLocal() as session, session.begin():
+    async with sessions() as session, session.begin():
         user = await get_or_create_user(session, _discord_id())
         user_id = user.id
         await apply_wallet_transaction(
@@ -83,7 +93,7 @@ async def test_wallet_reference_is_idempotent_across_sessions() -> None:
         )
 
     async def debit_same_reference():
-        async with SessionLocal() as session, session.begin():
+        async with sessions() as session, session.begin():
             tx = await apply_wallet_transaction(
                 session,
                 user_id=user_id,
@@ -96,7 +106,7 @@ async def test_wallet_reference_is_idempotent_across_sessions() -> None:
     try:
         tx_ids = await asyncio.gather(debit_same_reference(), debit_same_reference())
         assert tx_ids[0] == tx_ids[1]
-        async with SessionLocal() as session:
+        async with sessions() as session:
             assert await get_balance(session, user_id) == Decimal("20.00")
             count = await session.scalar(
                 select(func.count(WalletTransaction.id)).where(
@@ -105,13 +115,15 @@ async def test_wallet_reference_is_idempotent_across_sessions() -> None:
             )
             assert count == 1
     finally:
-        await _delete_user(user_id)
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_payment_confirmation_is_idempotent_under_concurrency() -> None:
+    engine, sessions = _database()
     payment_id = f"payment-{uuid4()}"
-    async with SessionLocal() as session, session.begin():
+    async with sessions() as session, session.begin():
         user = await get_or_create_user(session, _discord_id())
         user_id = user.id
         topup = CreditTopUp(
@@ -134,7 +146,7 @@ async def test_payment_confirmation_is_idempotent_under_concurrency() -> None:
     }
 
     async def confirm_payment():
-        async with SessionLocal() as session, session.begin():
+        async with sessions() as session, session.begin():
             approved = await process_approved_payment(session, payment=payment)
             assert approved is not None
             return approved.status
@@ -142,7 +154,7 @@ async def test_payment_confirmation_is_idempotent_under_concurrency() -> None:
     try:
         statuses = await asyncio.gather(confirm_payment(), confirm_payment())
         assert statuses == ["approved", "approved"]
-        async with SessionLocal() as session:
+        async with sessions() as session:
             assert await get_balance(session, user_id) == Decimal("10.80")
             tx_count = await session.scalar(
                 select(func.count(WalletTransaction.id)).where(
@@ -157,4 +169,5 @@ async def test_payment_confirmation_is_idempotent_under_concurrency() -> None:
             assert tx_count == 1
             assert notification_count == 1
     finally:
-        await _delete_user(user_id)
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
