@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.db.models import CreditTopUp, Order, OrderItem, RobuxRate, User, WalletTransaction
 from app.db.payment_models import TopUpNotification
-from app.services.orders import create_robux_order
+from app.services.orders import create_robux_order, pay_order_with_credits, refund_order
 from app.services.topups import process_approved_payment
 from app.services.users import get_or_create_user
 from app.services.wallets import InsufficientCreditsError, apply_wallet_transaction, get_balance
@@ -170,6 +170,73 @@ async def test_payment_confirmation_is_idempotent_under_concurrency() -> None:
             assert tx_count == 1
             assert notification_count == 1
     finally:
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_order_payment_and_refund_are_idempotent_under_concurrency() -> None:
+    engine, sessions = _database()
+    seed_reference = f"test:{uuid4()}:seed"
+    async with sessions() as session, session.begin():
+        user = await get_or_create_user(session, _discord_id())
+        user_id = user.id
+        await apply_wallet_transaction(
+            session,
+            user_id=user_id,
+            amount=Decimal("100.00"),
+            kind="test_credit",
+            reference=seed_reference,
+        )
+        order = Order(
+            guild_id=123,
+            user_id=user_id,
+            status="pending",
+            total_credits=Decimal("30.00"),
+        )
+        session.add(order)
+        await session.flush()
+        order_id = order.id
+
+    async def pay():
+        async with sessions() as session, session.begin():
+            paid = await pay_order_with_credits(session, order_id=order_id)
+            return paid.status
+
+    async def refund():
+        async with sessions() as session, session.begin():
+            refunded = await refund_order(session, order_id=order_id, reason="teste concorrente")
+            return refunded.status
+
+    try:
+        assert await asyncio.gather(pay(), pay()) == ["paid", "paid"]
+        async with sessions() as session:
+            assert await get_balance(session, user_id) == Decimal("70.00")
+            user = await session.get(User, user_id)
+            assert user is not None
+            assert user.total_spent == Decimal("30.00")
+            purchase_count = await session.scalar(
+                select(func.count(WalletTransaction.id)).where(
+                    WalletTransaction.reference == f"order:{order_id}:purchase"
+                )
+            )
+            assert purchase_count == 1
+
+        assert await asyncio.gather(refund(), refund()) == ["refunded", "refunded"]
+        async with sessions() as session:
+            assert await get_balance(session, user_id) == Decimal("100.00")
+            user = await session.get(User, user_id)
+            assert user is not None
+            assert user.total_spent == Decimal("0.00")
+            refund_count = await session.scalar(
+                select(func.count(WalletTransaction.id)).where(
+                    WalletTransaction.reference == f"order:{order_id}:refund"
+                )
+            )
+            assert refund_count == 1
+    finally:
+        async with sessions() as session, session.begin():
+            await session.execute(delete(Order).where(Order.id == order_id))
         await _delete_user(sessions, user_id)
         await engine.dispose()
 
