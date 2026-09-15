@@ -7,7 +7,6 @@ Create Date: 2026-09-15
 from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
 
 revision: str = "0005_ticket_settings_unique_cleanup"
 down_revision: str | None = "0004_ticket_settings"
