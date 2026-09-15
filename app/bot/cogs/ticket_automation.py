@@ -34,6 +34,7 @@ class TicketAutomationCog(commands.Cog):
             return
         try:
             order_id = UUID(match.group(1))
+            topic_customer_id = int(match.group(2))
         except ValueError:
             return
 
@@ -42,7 +43,7 @@ class TicketAutomationCog(commands.Cog):
             if order is None or order.guild_id != channel.guild.id:
                 return
             user = await session.get(User, order.user_id)
-            if user is None:
+            if user is None or user.discord_user_id != topic_customer_id:
                 return
             items = list(
                 (
