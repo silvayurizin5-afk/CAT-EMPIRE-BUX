@@ -1,23 +1,48 @@
+import logging
+
 import discord
 from discord.ext import commands
 
+from app.bot.views.store import StoreHomeView
 from app.core.config import settings
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True  # necessário para calculadora/FAQ e feedback via mensagem
 
-bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+class NextBuyBot(commands.Bot):
+    def __init__(self) -> None:
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.message_content = True
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+
+    async def setup_hook(self) -> None:
+        await self.load_extension("app.bot.cogs.admin")
+        self.add_view(StoreHomeView())
+        if settings.discord_guild_id:
+            guild = discord.Object(id=settings.discord_guild_id)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            logger.info("Comandos sincronizados no servidor de desenvolvimento %s", guild.id)
+        else:
+            await self.tree.sync()
+            logger.info("Comandos globais sincronizados")
+
+
+bot = NextBuyBot()
 
 
 @bot.event
 async def on_ready() -> None:
-    print(f"NEXTBUY online como {bot.user}")
+    logger.info("NEXTBUY online como %s", bot.user)
 
 
 def run() -> None:
-    bot.run(settings.discord_token)
+    token = settings.discord_token.get_secret_value()
+    if not token:
+        raise RuntimeError("DISCORD_TOKEN não configurado")
+    bot.run(token)
 
 
 if __name__ == "__main__":
