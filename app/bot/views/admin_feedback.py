@@ -137,6 +137,14 @@ class FeedbackSettingsModal(discord.ui.Modal, title="Configurar feedbacks"):
 
 
 class ExtendedAdminPanelView(AdminPanelView):
+    @discord.ui.button(label="Gerenciar produtos", style=discord.ButtonStyle.primary)
+    async def manage_products(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        from app.bot.views.product_admin import send_product_management
+
+        await send_product_management(interaction)
+
     @discord.ui.button(label="Feedbacks", style=discord.ButtonStyle.primary)
     async def feedback_settings(
         self, interaction: discord.Interaction, _: discord.ui.Button
