@@ -63,7 +63,7 @@ class TermsGateView(discord.ui.View):
         if not terms:
             raise ValueError("TermsGateView exige pelo menos um termo")
         super().__init__(timeout=300)
-        self._snapshot = _terms_snapshot(terms)
+        self._terms_versions = _terms_snapshot(terms)
         self._resume_view = resume_view
         self.add_item(TermsGateSelect(terms))
 
@@ -85,14 +85,14 @@ class TermsGateView(discord.ui.View):
                 user_id=user.id,
             )
             current_snapshot = _terms_snapshot(current_missing)
-            if current_snapshot == self._snapshot:
+            if current_snapshot == self._terms_versions:
                 await accept_current_terms(
                     session,
                     guild_id=interaction.guild.id,
                     user_id=user.id,
                 )
 
-        if current_snapshot != self._snapshot:
+        if current_snapshot != self._terms_versions:
             if current_missing:
                 await interaction.edit_original_response(
                     content="Os termos mudaram. Revise a versão atual antes de continuar.",
