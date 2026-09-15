@@ -5,6 +5,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import TermsAcceptance, TermsDocument
 
 
+async def list_terms(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    limit: int = 25,
+) -> list[TermsDocument]:
+    return list(
+        (
+            await session.scalars(
+                select(TermsDocument)
+                .where(TermsDocument.guild_id == guild_id)
+                .order_by(TermsDocument.active.desc(), TermsDocument.title, TermsDocument.id)
+                .limit(max(1, min(limit, 100)))
+            )
+        ).all()
+    )
+
+
+async def set_terms_active(
+    session: AsyncSession,
+    *,
+    terms: TermsDocument,
+    active: bool,
+) -> TermsDocument:
+    terms.active = active
+    await session.flush()
+    return terms
+
+
 async def list_active_terms_for_acceptance(
     session: AsyncSession,
     *,
