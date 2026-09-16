@@ -12,7 +12,6 @@ from app.bot.workflows.feedback_permissions import (
 )
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.services.catalog import ensure_default_robux_rate
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,6 +52,7 @@ class NextBuyBot(commands.Bot):
         await self.load_extension("app.bot.cogs.stripe_payments")
         await self.load_extension("app.bot.cogs.ticket_automation")
         await self.load_extension("app.bot.cogs.audit_logs")
+        await self.load_extension("app.bot.cogs.leaderboard_refresh")
         self.add_view(StoreHomeView())
         self.add_view(LeaderboardView())
         await self._restore_ticket_views()
@@ -77,13 +77,6 @@ async def on_ready() -> None:
         return
     for guild in bot.guilds:
         try:
-            async with SessionLocal() as session, session.begin():
-                created_rate = await ensure_default_robux_rate(session, guild_id=guild.id)
-            if created_rate is not None:
-                logger.info(
-                    "Cotação padrão de Robux criada no servidor %s: R$ 2,90 por 100 Robux",
-                    guild.id,
-                )
             await sync_feedback_channel_permissions(guild)
         except FeedbackPermissionSyncError as exc:
             logger.warning(
