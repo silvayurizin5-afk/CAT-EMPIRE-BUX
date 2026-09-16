@@ -45,7 +45,6 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.UniqueConstraint("guild_id", name="uq_ai_configs_guild_id"),
     )
     op.create_index("ix_ai_configs_guild_id", "ai_configs", ["guild_id"], unique=True)
 
