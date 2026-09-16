@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 import discord
 
+from app.bot.emoji import select_option_emoji
 from app.bot.views.admin import ProductModal
 from app.bot.views.product_admin import send_product_management
 from app.bot.views.store_panel import (
@@ -109,6 +110,7 @@ class StoreAppearanceModal(discord.ui.Modal, title="Visual do painel da loja"):
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
+        await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             config.title = str(self.title_input).strip() or "NEXTBUY"
@@ -117,7 +119,7 @@ class StoreAppearanceModal(discord.ui.Modal, title="Visual do painel da loja"):
             config.image_url = image_url
             config.footer_text = str(self.footer_input).strip()
 
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="Visual atualizado. A prévia abaixo já usa a nova configuração.",
             embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
@@ -166,6 +168,7 @@ class StoreControlsModal(discord.ui.Modal, title="Controles do painel"):
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
+        await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             config.product_placeholder = str(self.placeholder).strip() or "Selecione um produto"
@@ -174,7 +177,7 @@ class StoreControlsModal(discord.ui.Modal, title="Controles do painel"):
             config.terms_label = str(self.terms).strip() or "Termos"
             config.thumbnail_url = thumbnail_url
 
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="Seletor e botões atualizados.",
             embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
@@ -203,7 +206,7 @@ class StoreProductMultiSelect(discord.ui.Select):
                         f"{'ativo' if product.active else 'desativado'} • "
                         f"estoque {'∞' if product.stock_quantity is None else product.stock_quantity}"
                     )[:100],
-                    emoji=product.emoji or None,
+                    emoji=select_option_emoji(product.emoji),
                     default=product.id in selected,
                 )
             )
@@ -217,6 +220,7 @@ class StoreProductMultiSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         product_ids = [] if "all" in self.values else [int(value) for value in self.values]
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
@@ -225,7 +229,7 @@ class StoreProductMultiSelect(discord.ui.Select):
                 config=config,
                 product_ids=product_ids,
             )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=(
                 "O painel agora acompanha todos os produtos ativos."
                 if not product_ids
@@ -271,6 +275,7 @@ class CouponCreateModal(discord.ui.Modal, title="Criar / atualizar cupom"):
             )
             return
 
+        await interaction.response.defer()
         try:
             async with SessionLocal() as session, session.begin():
                 coupon = await upsert_coupon(
@@ -281,10 +286,10 @@ class CouponCreateModal(discord.ui.Modal, title="Criar / atualizar cupom"):
                     max_uses=max_uses,
                 )
         except ValueError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
+            await interaction.edit_original_response(content=str(exc))
             return
 
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"Cupom `{coupon.code}` salvo com **{coupon.discount_percent:.2f}%** de desconto.",
             embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
@@ -307,14 +312,15 @@ class CouponActionsView(discord.ui.View):
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             coupon = await session.get(StoreCoupon, self.coupon_id)
             if coupon is None or coupon.guild_id != interaction.guild.id:
-                await interaction.response.send_message("Cupom não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Cupom não encontrado.")
                 return
             await set_coupon_active(session, coupon=coupon, active=not coupon.active)
             status = "ativado" if coupon.active else "desativado"
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"Cupom `{coupon.code}` {status}.",
             embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=self.owner_id),
@@ -341,11 +347,12 @@ class CouponManageSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         coupon_id = int(self.values[0])
         async with SessionLocal() as session:
             coupon = await session.get(StoreCoupon, coupon_id)
         if coupon is None or coupon.guild_id != interaction.guild.id:
-            await interaction.response.edit_message(content="Cupom não encontrado.", view=None)
+            await interaction.edit_original_response(content="Cupom não encontrado.", view=None)
             return
         embed = discord.Embed(
             title=f"Cupom • {coupon.code}",
@@ -357,7 +364,7 @@ class CouponManageSelect(discord.ui.Select):
             name="Usos",
             value=f"{coupon.uses}/{coupon.max_uses if coupon.max_uses is not None else '∞'}",
         )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=None,
             embed=embed,
             view=CouponActionsView(coupon.id, self.owner_id),
@@ -391,9 +398,16 @@ class StorePublishChannelSelect(discord.ui.ChannelSelect):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             message = await publish_store_panel(interaction, channel)
-        except (discord.Forbidden, discord.HTTPException):
+        except discord.Forbidden:
             await interaction.edit_original_response(
-                content="Não consegui publicar nesse canal. Revise as permissões do bot.",
+                content="Não consegui publicar nesse canal. O bot não tem permissão para enviar mensagens/embeds nele.",
+                embed=None,
+                view=None,
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.edit_original_response(
+                content=f"O Discord recusou o painel ao publicar (código {exc.code}). Revise os dados do painel e tente novamente.",
                 embed=None,
                 view=None,
             )
@@ -476,17 +490,19 @@ class StorePanelAdminView(discord.ui.View):
             return
 
         if action == "products":
+            await interaction.response.defer()
             async with SessionLocal() as session, session.begin():
                 config = await get_or_create_store_panel(session, interaction.guild.id)
                 selected_ids = list(config.selected_product_ids or [])
                 products = await list_products(session, guild_id=interaction.guild.id)
             if not products:
-                await interaction.response.send_message(
-                    "Crie pelo menos um produto antes de configurar o seletor.",
-                    ephemeral=True,
+                await interaction.edit_original_response(
+                    content="Crie pelo menos um produto antes de configurar o seletor.",
+                    embed=None,
+                    view=None,
                 )
                 return
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content="Selecione os produtos do painel. **Todos** acompanha os ativos automaticamente.",
                 embed=None,
                 view=StoreProductSelectionView(products, selected_ids),
@@ -502,15 +518,17 @@ class StorePanelAdminView(discord.ui.View):
             return
 
         if action == "manage_coupons":
+            await interaction.response.defer()
             async with SessionLocal() as session:
                 coupons = await list_coupons(session, guild_id=interaction.guild.id)
             if not coupons:
-                await interaction.response.send_message(
-                    "Nenhum cupom cadastrado. Use **Criar cupom** primeiro.",
-                    ephemeral=True,
+                await interaction.edit_original_response(
+                    content="Nenhum cupom cadastrado. Use **Criar cupom** primeiro.",
+                    embed=None,
+                    view=None,
                 )
                 return
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content="Escolha o cupom:",
                 embed=None,
                 view=CouponManageView(coupons, self.owner_id),
