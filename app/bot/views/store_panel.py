@@ -5,6 +5,7 @@ from uuid import UUID
 import discord
 from sqlalchemy import select
 
+from app.bot.emoji import select_option_emoji
 from app.bot.views import store
 from app.bot.views.manual_pix import open_manual_pix_ticket
 from app.bot.views.profile import build_profile_embed
@@ -109,6 +110,7 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or interaction.user.id != self.owner_id:
             return
+        await interaction.response.defer()
         async with SessionLocal() as session:
             product = await session.get(Product, self.product_id)
             coupon = await get_coupon_by_code(
@@ -117,15 +119,14 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
                 code=str(self.code),
             )
         if product is None or product.guild_id != interaction.guild.id or not product.active:
-            await interaction.response.send_message("Produto indisponível.", ephemeral=True)
+            await interaction.edit_original_response(content="Produto indisponível.")
             return
         if coupon is None:
-            await interaction.response.send_message(
-                "Cupom inválido, desativado ou sem usos disponíveis.",
-                ephemeral=True,
+            await interaction.edit_original_response(
+                content="Cupom inválido, desativado ou sem usos disponíveis."
             )
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=build_product_checkout_embed(
                 product,
                 coupon_code=coupon.code,
@@ -168,7 +169,7 @@ class ConfiguredProductCheckoutView(discord.ui.View):
             await interaction.edit_original_response(
                 content=(
                     "O pagamento PIX ainda não foi configurado pela equipe. "
-                    "Defina PIX_KEY, PIX_RECEIVER_NAME e PIX_RECEIVER_CITY no ambiente do bot."
+                    "Defina PIX_KEY e PIX_RECEIVER_NAME no ambiente do bot."
                 ),
                 embed=None,
                 view=None,
@@ -280,7 +281,7 @@ class StoreProductSelect(discord.ui.Select):
                     label=product.name[:100],
                     value=str(product.id),
                     description=f"{price} • estoque {stock}"[:100],
-                    emoji=product.emoji or None,
+                    emoji=select_option_emoji(product.emoji),
                 )
             )
         if not options:
@@ -306,6 +307,7 @@ class StoreProductSelect(discord.ui.Select):
         if self.values[0] == "none":
             await interaction.response.send_message("Nenhum produto disponível agora.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         product_id = int(self.values[0])
         async with SessionLocal() as session:
             product = await session.get(Product, product_id)
@@ -316,15 +318,14 @@ class StoreProductSelect(discord.ui.Select):
             or product.price_credits is None
             or (product.stock_quantity is not None and product.stock_quantity <= 0)
         ):
-            await interaction.response.send_message("Produto indisponível.", ephemeral=True)
+            await interaction.edit_original_response(content="Produto indisponível.", embed=None, view=None)
             return
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=build_product_checkout_embed(product),
             view=ConfiguredProductCheckoutView(
                 product_id=product.id,
                 owner_id=interaction.user.id,
             ),
-            ephemeral=True,
         )
 
 
