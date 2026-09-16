@@ -139,7 +139,9 @@ def robux_from_brl(amount_brl: Decimal, price_per_100: Decimal = ROBUX_PRICE_PER
 
 
 def format_brl(value: Decimal) -> str:
-    return f"R$ {money(value):.2f}".replace(".", ",")
+    raw = f"{money(value):,.2f}"
+    localized = raw.replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"R$ {localized}"
 
 
 def format_robux(value: int) -> str:
