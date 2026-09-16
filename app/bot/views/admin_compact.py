@@ -1,14 +1,14 @@
 import discord
 from sqlalchemy import func, select
 
-from app.bot.views.admin import (
+from app.bot.views.admin_feedback import FeedbackSettingsModal
+from app.bot.views.admin_forms import (
     AutoReplyModal,
     ConfigTargetView,
     RankRoleView,
     RobuxRateModal,
     TermsModal,
 )
-from app.bot.views.admin_feedback import FeedbackSettingsModal
 from app.bot.views.automation_admin import (
     send_auto_reply_management,
     send_robux_rate_management,
