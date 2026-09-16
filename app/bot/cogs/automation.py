@@ -33,7 +33,6 @@ from app.services.calculator import (
     parse_calculation_message,
     robux_from_brl,
     robux_quote,
-    strip_coupon,
 )
 from app.services.store_panel import get_coupon_by_code
 
@@ -43,153 +42,119 @@ ROBUX_EMOJI = "<:ROBUXNextBuy:1549604652557934702>"
 PIX_EMOJI = "<:PIX:1549632822388592663>"
 GIFT_EMOJI = "<a:gift_Nextbuy:1549633615032221788>"
 
-AI_SYSTEM_PROMPT = """Você é o interpretador da loja NEXTBUY no Discord.
-Responda SOMENTE com um objeto JSON válido, sem markdown e sem texto fora do JSON.
-Você não pode inventar preço, estoque, produto, política da loja ou disponibilidade.
-Preço e estoque serão validados pelo backend; sua função é somente interpretar a intenção.
-Não use emojis Unicode. Em perguntas gerais, você pode sugerir no máximo UM emoji customizado
-pelo nome, e somente se ele estiver na lista de emojis fornecida.
-
-Formato obrigatório:
-{
-  "intent": "robux|gamepass|item|catalog|store_question|unclear|other",
-  "product_name": null,
-  "game_name": null,
-  "quantity": null,
-  "robux": null,
-  "brl": null,
-  "question": null,
-  "reply": null,
-  "emoji_name": null,
-  "missing": []
-}
-
-Regras:
-- robux: pedido de cálculo/compra envolvendo quantidade de Robux.
-- gamepass: pedido de Game Pass/Gift de um jogo; extraia jogo e Robux quando existirem.
-- item: item específico de jogo; extraia nome, jogo e quantidade.
-- catalog: pergunta se existe/tem estoque de um produto ou jogo.
-- store_question: pergunta geral sobre a loja. Só preencha reply se a resposta estiver
-  explicitamente sustentada pelo contexto fornecido. Caso contrário deixe reply null.
-- unclear: intenção de compra/cálculo existe, mas faltam dados importantes; liste em missing.
-- other: assunto sem relação clara com a loja.
-- Nunca calcule preço dentro do JSON.
+AI_SYSTEM_PROMPT = """Você interpreta mensagens para a loja NEXTBUY.
+Responda SOMENTE JSON válido, sem markdown.
+Nunca invente preço, estoque, produto, política ou disponibilidade. O backend valida tudo.
+Não calcule preços. Não use emojis Unicode. Para perguntas gerais, pode sugerir no máximo
+um emoji customizado pelo nome, somente entre os nomes fornecidos.
+Formato:
+{"intent":"robux|gamepass|item|catalog|store_question|unclear|other",
+"product_name":null,"game_name":null,"quantity":null,"robux":null,"brl":null,
+"question":null,"reply":null,"emoji_name":null,"missing":[]}
+Use robux para cálculo/compra de Robux; gamepass para Game Pass/Gift; item para item de jogo;
+catalog para disponibilidade; store_question para dúvida geral da loja; unclear se faltam dados;
+other se não houver relação clara. Em store_question, só preencha reply se o contexto sustentar.
 """
 
 
-def _is_available(product: Product) -> bool:
-    return bool(product.active and (product.stock_quantity is None or product.stock_quantity > 0))
-
-
-def _product_type(product: Product) -> str:
+def _ptype(product: Product) -> str:
     return normalize_text(product.product_type).replace(" ", "_")
 
 
-def _product_snapshot(products: list[Product]) -> list[dict[str, object]]:
+def _available(product: Product) -> bool:
+    return bool(product.active and (product.stock_quantity is None or product.stock_quantity > 0))
+
+
+def _snapshot(products: list[Product]) -> list[dict[str, object]]:
     return [
         {
-            "name": product.name,
-            "type": product.product_type,
-            "game": product.game_name,
-            "active": bool(product.active),
-            "stock": product.stock_quantity,
-            "has_price": product.price_credits is not None,
+            "name": p.name,
+            "type": p.product_type,
+            "game": p.game_name,
+            "active": bool(p.active),
+            "stock": p.stock_quantity,
+            "has_price": p.price_credits is not None,
         }
-        for product in products[:80]
+        for p in products[:80]
     ]
 
 
 def _find_product(
     products: list[Product],
     *,
-    product_name: str | None,
-    game_name: str | None = None,
-    allowed_types: set[str] | None = None,
+    name: str | None,
+    game: str | None = None,
+    types: set[str] | None = None,
 ) -> Product | None:
-    wanted = normalize_text(product_name or "")
-    wanted_game = normalize_text(game_name or "")
-    candidates: list[Product] = []
+    wanted = normalize_text(name or "")
+    wanted_game = normalize_text(game or "")
+    partial: list[Product] = []
     for product in products:
-        if allowed_types and _product_type(product) not in allowed_types:
+        if types and _ptype(product) not in types:
             continue
         if wanted_game and normalize_text(product.game_name or "") != wanted_game:
             continue
-        normalized_name = normalize_text(product.name)
-        if wanted and normalized_name == wanted:
+        current = normalize_text(product.name)
+        if wanted and current == wanted:
             return product
-        if wanted and (wanted in normalized_name or normalized_name in wanted):
-            candidates.append(product)
-    return candidates[0] if len(candidates) == 1 else None
+        if wanted and (wanted in current or current in wanted):
+            partial.append(product)
+    return partial[0] if len(partial) == 1 else None
 
 
-def _game_exists(products: list[Product], game_name: str | None, *, types: set[str]) -> bool:
-    wanted = normalize_text(game_name or "")
-    if not wanted:
-        return False
-    return any(
-        _product_type(product) in types
-        and normalize_text(product.game_name or "") == wanted
-        and _is_available(product)
-        for product in products
+def _game_available(products: list[Product], game: str | None) -> bool:
+    wanted = normalize_text(game or "")
+    return bool(
+        wanted
+        and any(
+            _ptype(p) in {"gamepass", "game_pass", "gift", "item"}
+            and normalize_text(p.game_name or "") == wanted
+            and _available(p)
+            for p in products
+        )
     )
 
 
-def _robux_available(products: list[Product], requested: int) -> bool:
-    robux_products = [
-        product
-        for product in products
-        if _product_type(product) == "robux" and _is_available(product)
-    ]
-    if not robux_products:
-        return False
-    return any(
-        product.stock_quantity is None or product.stock_quantity >= requested
-        for product in robux_products
-    )
+def _robux_available(products: list[Product], amount: int) -> bool:
+    candidates = [p for p in products if _ptype(p) == "robux" and _available(p)]
+    return any(p.stock_quantity is None or p.stock_quantity >= amount for p in candidates)
 
 
-def _resolve_custom_emoji(guild: discord.Guild, name: str | None) -> str:
-    if not name:
+def _mention_channel(guild: discord.Guild, channel_id: int | None) -> str | None:
+    channel = guild.get_channel(channel_id) if channel_id else None
+    return channel.mention if isinstance(channel, discord.TextChannel) else None
+
+
+def _custom_emoji(guild: discord.Guild, name: str | None) -> str:
+    target = (name or "").strip().lower()
+    if not target:
         return ""
-    target = name.strip().lower()
     for emoji in guild.emojis:
         if emoji.name.lower() == target and emoji.is_usable():
             return str(emoji)
     return ""
 
 
-def _channel_mention(guild: discord.Guild, channel_id: int | None) -> str | None:
-    if not channel_id:
-        return None
-    channel = guild.get_channel(channel_id)
-    return channel.mention if isinstance(channel, discord.TextChannel) else None
-
-
-def _coupon_line(code: str | None, percent: Decimal | None) -> str:
+def _coupon_line(code: str | None, percent: Decimal | None) -> str | None:
     if not code or percent is None:
-        return ""
+        return None
     return f"- **Cupom:** `{code}` • **{format_percent(percent)}**"
 
 
-async def _reply_card(
+async def _reply(
     message: discord.Message,
     *,
     title: str,
     lines: list[str],
-    description: str | None = None,
     footer: str | None = None,
 ) -> None:
-    if message.guild is None:
-        return
-    view = CardLayout(
-        title=title,
-        description=description,
-        lines=[message.author.mention, *lines],
-        footer=footer,
-        timeout=180,
-    )
     await message.reply(
-        view=view,
+        view=CardLayout(
+            title=title,
+            lines=[message.author.mention, *lines],
+            footer=footer,
+            timeout=180,
+        ),
         mention_author=False,
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
@@ -202,15 +167,11 @@ class AutomationCog(commands.Cog):
         self.bot = bot
         self._cooldowns: dict[tuple[int, int], float] = {}
 
-    async def _require_admin(self, interaction: discord.Interaction) -> bool:
+    async def _admin(self, interaction: discord.Interaction) -> bool:
         if await can_admin(interaction):
             return True
-        if interaction.response.is_done():
-            await interaction.followup.send("Você não tem acesso a essa configuração.", ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                "Você não tem acesso a essa configuração.", ephemeral=True
-            )
+        target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        await target("Você não tem acesso a essa configuração.", ephemeral=True)
         return False
 
     @ia.command(name="canal", description="Adiciona ou remove um canal onde a IA pode responder")
@@ -221,30 +182,25 @@ class AutomationCog(commands.Cog):
         canal: discord.TextChannel,
         ativo: bool = True,
     ) -> None:
-        if interaction.guild is None or not await self._require_admin(interaction):
+        if interaction.guild is None or not await self._admin(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_ai_config(session, interaction.guild.id)
-            channels = [int(value) for value in (config.allowed_channel_ids or [])]
-            if ativo and canal.id not in channels:
-                channels.append(canal.id)
+            ids = [int(value) for value in (config.allowed_channel_ids or [])]
+            if ativo and canal.id not in ids:
+                ids.append(canal.id)
             elif not ativo:
-                channels = [value for value in channels if value != canal.id]
-            await set_ai_channels(session, config=config, channel_ids=channels)
-        status = "adicionado" if ativo else "removido"
+                ids = [value for value in ids if value != canal.id]
+            await set_ai_channels(session, config=config, channel_ids=ids)
         await interaction.edit_original_response(
-            content=f"{canal.mention} {status} dos canais autorizados da IA."
+            content=f"{canal.mention} {'adicionado' if ativo else 'removido'} dos canais da IA."
         )
 
     @ia.command(name="suporte", description="Define o canal usado quando a IA precisa da equipe")
     @app_commands.guild_only()
-    async def ai_support(
-        self,
-        interaction: discord.Interaction,
-        canal: discord.TextChannel,
-    ) -> None:
-        if interaction.guild is None or not await self._require_admin(interaction):
+    async def ai_support(self, interaction: discord.Interaction, canal: discord.TextChannel) -> None:
+        if interaction.guild is None or not await self._admin(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
@@ -252,17 +208,12 @@ class AutomationCog(commands.Cog):
             await set_support_channel(session, config=config, channel_id=canal.id)
         await interaction.edit_original_response(content=f"Canal de suporte: {canal.mention}")
 
-    @ia.command(
-        name="sugestoes",
-        description="Define o canal para pedidos de produtos/jogos que não estão na loja",
-    )
+    @ia.command(name="sugestoes", description="Define o canal para produtos ausentes da loja")
     @app_commands.guild_only()
     async def ai_suggestions(
-        self,
-        interaction: discord.Interaction,
-        canal: discord.TextChannel,
+        self, interaction: discord.Interaction, canal: discord.TextChannel
     ) -> None:
-        if interaction.guild is None or not await self._require_admin(interaction):
+        if interaction.guild is None or not await self._admin(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
@@ -273,7 +224,7 @@ class AutomationCog(commands.Cog):
     @ia.command(name="status", description="Liga ou desliga a IA neste servidor")
     @app_commands.guild_only()
     async def ai_status(self, interaction: discord.Interaction, ativo: bool) -> None:
-        if interaction.guild is None or not await self._require_admin(interaction):
+        if interaction.guild is None or not await self._admin(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
@@ -286,40 +237,39 @@ class AutomationCog(commands.Cog):
     @ia.command(name="ver", description="Mostra a configuração atual da IA")
     @app_commands.guild_only()
     async def ai_view(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None or not await self._require_admin(interaction):
+        if interaction.guild is None or not await self._admin(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_ai_config(session, interaction.guild.id)
-            channel_ids = [int(value) for value in (config.allowed_channel_ids or [])]
+            ids = [int(value) for value in (config.allowed_channel_ids or [])]
             support_id = config.support_channel_id
             suggestions_id = config.suggestions_channel_id
             enabled = config.enabled
-            provider_order = list(config.provider_order or [])
-        channel_text = ", ".join(
+            order = list(config.provider_order or [])
+        channels = ", ".join(
             channel.mention
-            for channel_id in channel_ids
+            for channel_id in ids
             if isinstance((channel := interaction.guild.get_channel(channel_id)), discord.TextChannel)
         ) or "Nenhum"
-        providers = [item.name for item in available_providers(provider_order)]
-        card = CardLayout(
-            title="NEXTBUY • IA",
-            lines=[
-                f"- **Status:** `{'Ativa' if enabled else 'Desativada'}`",
-                f"- **Canais autorizados:** {channel_text}",
-                f"- **Suporte:** {_channel_mention(interaction.guild, support_id) or 'Não configurado'}",
-                f"- **Sugestões:** {_channel_mention(interaction.guild, suggestions_id) or 'Não configurado'}",
-                f"- **Provedores disponíveis:** `{', '.join(providers) if providers else 'nenhum'}`",
-            ],
-            footer="A IA ignora completamente canais que não estejam autorizados.",
+        providers = ", ".join(item.name for item in available_providers(order)) or "nenhum"
+        await interaction.edit_original_response(
+            content=None,
+            view=CardLayout(
+                title="NEXTBUY • IA",
+                lines=[
+                    f"- **Status:** `{'Ativa' if enabled else 'Desativada'}`",
+                    f"- **Canais autorizados:** {channels}",
+                    f"- **Suporte:** {_mention_channel(interaction.guild, support_id) or 'Não configurado'}",
+                    f"- **Sugestões:** {_mention_channel(interaction.guild, suggestions_id) or 'Não configurado'}",
+                    f"- **Provedores disponíveis:** `{providers}`",
+                ],
+                footer="Fora dos canais autorizados a IA não responde.",
+            ),
         )
-        await interaction.edit_original_response(content=None, view=card)
 
     async def _coupon(
-        self,
-        *,
-        guild_id: int,
-        content: str,
+        self, guild_id: int, content: str
     ) -> tuple[str | None, Decimal | None, str | None]:
         try:
             code = extract_coupon_code(content)
@@ -333,7 +283,7 @@ class AutomationCog(commands.Cog):
             return None, None, f"O cupom `{code}` não existe, está desativado ou acabou."
         return coupon.code, coupon.discount_percent, None
 
-    async def _load_context(self, guild_id: int):
+    async def _context(self, guild_id: int):
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_ai_config(session, guild_id)
             products = list(
@@ -349,20 +299,16 @@ class AutomationCog(commands.Cog):
             panel = await session.scalar(
                 select(StorePanelConfig).where(StorePanelConfig.guild_id == guild_id)
             )
-            return config, products, panel
+        return config, products, panel
 
     async def _interpret(
-        self,
-        message: discord.Message,
-        *,
-        products: list[Product],
-        provider_order: list[str],
+        self, message: discord.Message, products: list[Product], provider_order: list[str]
     ) -> dict[str, object] | None:
         if message.guild is None:
             return None
-        prompt = {
+        payload = {
             "message": message.content,
-            "catalog": _product_snapshot(products),
+            "catalog": _snapshot(products),
             "server_emoji_names": [emoji.name for emoji in message.guild.emojis[:80]],
             "facts": {
                 "currency": "BRL",
@@ -371,9 +317,9 @@ class AutomationCog(commands.Cog):
             },
         }
         try:
-            parsed, _provider = await request_structured_ai(
+            parsed, _ = await request_structured_ai(
                 system_prompt=AI_SYSTEM_PROMPT,
-                user_prompt=json.dumps(prompt, ensure_ascii=False),
+                user_prompt=json.dumps(payload, ensure_ascii=False),
                 provider_order=provider_order,
             )
             return parsed
@@ -381,78 +327,67 @@ class AutomationCog(commands.Cog):
             return None
 
     async def _unavailable(
-        self,
-        message: discord.Message,
-        *,
-        product_label: str,
-        suggestions_channel_id: int | None,
+        self, message: discord.Message, label: str, suggestions_id: int | None
     ) -> None:
         if message.guild is None:
             return
-        suggestions = _channel_mention(message.guild, suggestions_channel_id)
+        channel = _mention_channel(message.guild, suggestions_id)
         destination = (
-            f"Você pode pedir esse produto/jogo em {suggestions}."
-            if suggestions
+            f"Você pode pedir esse produto/jogo em {channel}."
+            if channel
             else "Esse produto não está disponível na loja agora."
         )
-        await _reply_card(
+        await _reply(
             message,
             title="Produto indisponível",
-            lines=[f"**{product_label}** não está disponível no estoque atual.", destination],
+            lines=[f"**{label}** não está disponível no estoque atual.", destination],
         )
 
-    async def _support_reply(
+    async def _support(
         self,
         message: discord.Message,
-        *,
         text: str | None,
-        support_channel_id: int | None,
+        support_id: int | None,
         emoji_name: str | None = None,
     ) -> None:
         if message.guild is None:
             return
-        support = _channel_mention(message.guild, support_channel_id)
-        custom_emoji = _resolve_custom_emoji(message.guild, emoji_name)
+        channel = _mention_channel(message.guild, support_id)
         cleaned = strip_generic_emoji(text or "")
+        emoji = _custom_emoji(message.guild, emoji_name)
         lines: list[str] = []
         if cleaned:
-            prefix = f"{custom_emoji} " if custom_emoji else ""
-            lines.append(prefix + cleaned)
-        if not cleaned or support:
+            lines.append(f"{emoji + ' ' if emoji else ''}{cleaned}")
+        if not cleaned or channel:
             lines.append(
-                f"Se precisar de confirmação da equipe, use {support}."
-                if support
+                f"Se precisar de confirmação da equipe, use {channel}."
+                if channel
                 else "Se precisar de confirmação, fale com a equipe."
             )
-        await _reply_card(message, title="NEXTBUY", lines=lines)
+        await _reply(message, title="NEXTBUY", lines=lines)
 
-    async def _handle_interpreted(
+    async def _handle_ai(
         self,
         message: discord.Message,
-        parsed: dict[str, object],
-        *,
+        data: dict[str, object],
         products: list[Product],
         panel: StorePanelConfig | None,
-        support_channel_id: int | None,
-        suggestions_channel_id: int | None,
-    ) -> bool:
+        support_id: int | None,
+        suggestions_id: int | None,
+    ) -> None:
         if message.guild is None:
-            return False
-        intent = str(parsed.get("intent") or "unclear").strip().lower()
-        product_name = str(parsed.get("product_name") or "").strip() or None
-        game_name = str(parsed.get("game_name") or "").strip() or None
-        coupon_code, discount_percent, coupon_error = await self._coupon(
-            guild_id=message.guild.id,
-            content=message.content,
-        )
-        if coupon_error:
-            await _reply_card(message, title="Cupom", lines=[coupon_error])
-            return True
+            return
+        intent = str(data.get("intent") or "unclear").strip().lower()
+        product_name = str(data.get("product_name") or "").strip() or None
+        game_name = str(data.get("game_name") or "").strip() or None
+        code, discount, error = await self._coupon(message.guild.id, message.content)
+        if error:
+            await _reply(message, title="Cupom", lines=[error])
+            return
 
         if intent == "robux":
-            raw = parsed.get("robux")
             try:
-                amount = int(raw) if raw is not None else 0
+                amount = int(data.get("robux") or 0)
             except (TypeError, ValueError):
                 amount = 0
             if amount <= 0:
@@ -460,114 +395,101 @@ class AutomationCog(commands.Cog):
                 if request is not None and request.kind is CalculationKind.ROBUX:
                     amount = int(request.amount)
             if amount <= 0:
-                await _reply_card(
+                await _reply(
                     message,
                     title="Falta a quantidade",
-                    lines=["Edite sua mensagem e informe quantos **Robux** você quer calcular."],
+                    lines=["Informe quantos **Robux** você quer calcular."],
                 )
-                return True
+                return
             if not _robux_available(products, amount):
-                await self._unavailable(
-                    message,
-                    product_label=f"{format_robux(amount)}",
-                    suggestions_channel_id=suggestions_channel_id,
-                )
-                return True
-            quote = robux_quote(amount, discount_percent)
+                await self._unavailable(message, format_robux(amount), suggestions_id)
+                return
+            quote = robux_quote(amount, discount)
             lines = [
                 f"- **{GIFT_EMOJI} Game Pass:** `{format_brl(quote.gamepass_brl)}`",
                 f"- **{ROBUX_EMOJI} Robux Via Plus:** `{format_brl(quote.via_plus_brl)}`",
                 f"- **{ROBUX_EMOJI} Robux cobrindo a taxa:** `{format_brl(quote.covering_fee_brl)}`",
             ]
-            if coupon_line := _coupon_line(coupon_code, discount_percent):
-                lines.append(coupon_line)
-            await _reply_card(
+            if coupon := _coupon_line(code, discount):
+                lines.append(coupon)
+            await _reply(
                 message,
                 title=f"{ROBUX_EMOJI} Cálculo — {format_robux(amount)}",
                 lines=lines,
             )
-            return True
+            return
 
         if intent == "gamepass":
             if not game_name:
-                await _reply_card(
+                await _reply(
                     message,
                     title="Falta o jogo",
-                    lines=["Edite sua mensagem e informe **qual jogo** é a Game Pass."],
+                    lines=["Informe **qual jogo** é a Game Pass."],
                 )
-                return True
-            if not _game_exists(products, game_name, types={"gamepass", "game_pass", "gift"}):
-                await self._unavailable(
-                    message,
-                    product_label=f"Game Pass de {game_name}",
-                    suggestions_channel_id=suggestions_channel_id,
-                )
-                return True
+                return
+            if not _game_available(products, game_name):
+                await self._unavailable(message, f"Game Pass de {game_name}", suggestions_id)
+                return
             try:
-                amount = int(parsed.get("robux") or 0)
+                amount = int(data.get("robux") or 0)
             except (TypeError, ValueError):
                 amount = 0
             if amount <= 0:
-                await _reply_card(
+                await _reply(
                     message,
-                    title="Falta o valor da Game Pass",
-                    lines=["Edite sua mensagem e informe a quantidade de **Robux** da Game Pass."],
+                    title="Falta o valor",
+                    lines=["Informe a quantidade de **Robux** da Game Pass."],
                 )
-                return True
-            quote = robux_quote(amount, discount_percent)
+                return
             icon = ""
             if panel is not None:
                 icon = dict(panel.game_icons or {}).get(normalize_text(game_name), "")
+            quote = robux_quote(amount, discount)
             lines = [
                 f"{icon + ' ' if icon else ''}**{game_name}**",
                 f"- **{GIFT_EMOJI} Game Pass:** `{format_brl(quote.gamepass_brl)}`",
             ]
-            if coupon_line := _coupon_line(coupon_code, discount_percent):
-                lines.append(coupon_line)
-            await _reply_card(
+            if coupon := _coupon_line(code, discount):
+                lines.append(coupon)
+            await _reply(
                 message,
                 title=f"{GIFT_EMOJI} Game Pass — {format_robux(amount)}",
                 lines=lines,
             )
-            return True
+            return
 
         if intent == "item":
             product = _find_product(
                 products,
-                product_name=product_name,
-                game_name=game_name,
-                allowed_types={"item"},
+                name=product_name,
+                game=game_name,
+                types={"item"},
             )
             if product is None:
-                label = product_name or (f"item de {game_name}" if game_name else "item solicitado")
                 await self._unavailable(
                     message,
-                    product_label=label,
-                    suggestions_channel_id=suggestions_channel_id,
+                    product_name or game_name or "item solicitado",
+                    suggestions_id,
                 )
-                return True
+                return
             try:
-                quantity = max(1, int(parsed.get("quantity") or 1))
+                quantity = max(1, int(data.get("quantity") or 1))
             except (TypeError, ValueError):
                 quantity = 1
-            if not _is_available(product) or (
+            if not _available(product) or (
                 product.stock_quantity is not None and product.stock_quantity < quantity
             ):
-                await self._unavailable(
-                    message,
-                    product_label=product.name,
-                    suggestions_channel_id=suggestions_channel_id,
-                )
-                return True
+                await self._unavailable(message, product.name, suggestions_id)
+                return
             if product.price_credits is None:
-                await self._support_reply(
+                await self._support(
                     message,
-                    text="Esse item existe na loja, mas ainda não possui preço cadastrado.",
-                    support_channel_id=support_channel_id,
+                    "Esse item existe na loja, mas ainda não possui preço cadastrado.",
+                    support_id,
                 )
-                return True
+                return
             unit = Decimal(product.price_credits)
-            total = apply_discount(unit * quantity, discount_percent)
+            total = apply_discount(unit * quantity, discount)
             icon = ""
             if panel is not None and product.game_name:
                 icon = dict(panel.game_icons or {}).get(normalize_text(product.game_name), "")
@@ -580,135 +502,115 @@ class AutomationCog(commands.Cog):
                     f"- **{PIX_EMOJI} Valor final:** `{format_brl(total)}`",
                 ]
             )
-            if coupon_line := _coupon_line(coupon_code, discount_percent):
-                lines.append(coupon_line)
-            await _reply_card(
+            if coupon := _coupon_line(code, discount):
+                lines.append(coupon)
+            await _reply(
                 message,
                 title=f"{PIX_EMOJI} Cálculo — {quantity}× {product.name}",
                 lines=lines,
             )
-            return True
+            return
 
         if intent == "catalog":
-            product = _find_product(products, product_name=product_name, game_name=game_name)
-            if product is not None and _is_available(product):
-                stock = "disponível" if product.stock_quantity is None else f"{product.stock_quantity} em estoque"
-                await _reply_card(
+            product = _find_product(products, name=product_name, game=game_name)
+            if product is not None and _available(product):
+                stock = (
+                    "disponível"
+                    if product.stock_quantity is None
+                    else f"{product.stock_quantity} em estoque"
+                )
+                await _reply(
                     message,
                     title="Disponibilidade",
                     lines=[f"**{product.name}** está disponível: **{stock}**."],
                 )
             else:
-                label = product_name or game_name or "produto solicitado"
                 await self._unavailable(
                     message,
-                    product_label=label,
-                    suggestions_channel_id=suggestions_channel_id,
+                    product_name or game_name or "produto solicitado",
+                    suggestions_id,
                 )
-            return True
+            return
 
         if intent == "store_question":
-            await self._support_reply(
+            await self._support(
                 message,
-                text=str(parsed.get("reply") or "").strip() or None,
-                support_channel_id=support_channel_id,
-                emoji_name=str(parsed.get("emoji_name") or "").strip() or None,
+                str(data.get("reply") or "").strip() or None,
+                support_id,
+                str(data.get("emoji_name") or "").strip() or None,
             )
-            return True
+            return
 
         if intent == "unclear":
-            missing = parsed.get("missing")
-            if isinstance(missing, list):
-                missing_text = ", ".join(str(item) for item in missing if str(item).strip())
-            else:
-                missing_text = ""
-            detail = (
-                f"Faltou informar: **{missing_text}**."
-                if missing_text
-                else "Não consegui identificar todos os dados necessários."
+            missing = data.get("missing")
+            names = (
+                ", ".join(str(item) for item in missing if str(item).strip())
+                if isinstance(missing, list)
+                else ""
             )
-            await _reply_card(
+            await _reply(
                 message,
                 title="Preciso de mais detalhes",
-                lines=[detail, "Edite sua mensagem e deixe o pedido mais claro."],
+                lines=[
+                    f"Faltou informar: **{names}**."
+                    if names
+                    else "Não consegui identificar todos os dados necessários.",
+                    "Deixe o pedido mais claro e envie novamente.",
+                ],
             )
-            return True
+            return
 
-        await self._support_reply(
-            message,
-            text=None,
-            support_channel_id=support_channel_id,
-        )
-        return True
+        await self._support(message, None, support_id)
 
-    async def _deterministic_fallback(
+    async def _fallback(
         self,
         message: discord.Message,
-        *,
         products: list[Product],
-        suggestions_channel_id: int | None,
+        suggestions_id: int | None,
     ) -> bool:
+        if message.guild is None:
+            return False
         request = parse_calculation_message(message.content)
         if request is None:
             return False
-        coupon_code, discount_percent, coupon_error = await self._coupon(
-            guild_id=message.guild.id,
-            content=message.content,
-        )
-        if coupon_error:
-            await _reply_card(message, title="Cupom", lines=[coupon_error])
+        code, discount, error = await self._coupon(message.guild.id, message.content)
+        if error:
+            await _reply(message, title="Cupom", lines=[error])
             return True
         if request.kind is CalculationKind.ROBUX:
             amount = int(request.amount)
             if not _robux_available(products, amount):
-                await self._unavailable(
-                    message,
-                    product_label=format_robux(amount),
-                    suggestions_channel_id=suggestions_channel_id,
-                )
+                await self._unavailable(message, format_robux(amount), suggestions_id)
                 return True
-            quote = robux_quote(amount, discount_percent)
+            quote = robux_quote(amount, discount)
             lines = [
                 f"- **{GIFT_EMOJI} Game Pass:** `{format_brl(quote.gamepass_brl)}`",
                 f"- **{ROBUX_EMOJI} Robux Via Plus:** `{format_brl(quote.via_plus_brl)}`",
                 f"- **{ROBUX_EMOJI} Robux cobrindo a taxa:** `{format_brl(quote.covering_fee_brl)}`",
             ]
-            if coupon_line := _coupon_line(coupon_code, discount_percent):
-                lines.append(coupon_line)
-            await _reply_card(
-                message,
-                title=f"{ROBUX_EMOJI} Cálculo — {format_robux(amount)}",
-                lines=lines,
-            )
-            return True
-
-        amount = Decimal(request.amount)
-        factor = Decimal("1")
-        if discount_percent is not None:
-            factor -= Decimal(discount_percent) / Decimal("100")
-        gamepass_rate = ROBUX_PRICE_PER_100 * factor
-        via_plus_rate = VIA_PLUS_PRICE_PER_100 * factor
-        covering_rate = (ROBUX_PRICE_PER_100 / ROBLOX_NET_AFTER_FEE) * factor
-        lines = [
-            f"- **{GIFT_EMOJI} Game Pass:** `{format_robux(robux_from_brl(amount, gamepass_rate))}`",
-            f"- **{ROBUX_EMOJI} Robux Via Plus:** `{format_robux(robux_from_brl(amount, via_plus_rate))}`",
-            f"- **{ROBUX_EMOJI} Robux cobrindo a taxa:** `{format_robux(robux_from_brl(amount, covering_rate))}`",
-        ]
-        if coupon_line := _coupon_line(coupon_code, discount_percent):
-            lines.append(coupon_line)
-        await _reply_card(
-            message,
-            title=f"{PIX_EMOJI} Cálculo — {format_brl(amount)}",
-            lines=lines,
+        else:
+            amount = Decimal(request.amount)
+            factor = Decimal("1") - (Decimal(discount or 0) / Decimal("100"))
+            lines = [
+                f"- **{GIFT_EMOJI} Game Pass:** `{format_robux(robux_from_brl(amount, ROBUX_PRICE_PER_100 * factor))}`",
+                f"- **{ROBUX_EMOJI} Robux Via Plus:** `{format_robux(robux_from_brl(amount, VIA_PLUS_PRICE_PER_100 * factor))}`",
+                f"- **{ROBUX_EMOJI} Robux cobrindo a taxa:** `{format_robux(robux_from_brl(amount, (ROBUX_PRICE_PER_100 / ROBLOX_NET_AFTER_FEE) * factor))}`",
+            ]
+        if coupon := _coupon_line(code, discount):
+            lines.append(coupon)
+        title = (
+            f"{ROBUX_EMOJI} Cálculo — {format_robux(int(request.amount))}"
+            if request.kind is CalculationKind.ROBUX
+            else f"{PIX_EMOJI} Cálculo — {format_brl(Decimal(request.amount))}"
         )
+        await _reply(message, title=title, lines=lines)
         return True
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or message.guild is None or not message.content.strip():
             return
-
-        config, products, panel = await self._load_context(message.guild.id)
+        config, products, panel = await self._context(message.guild.id)
         allowed = {int(value) for value in (config.allowed_channel_ids or [])}
         if not config.enabled or message.channel.id not in allowed:
             return
@@ -719,33 +621,19 @@ class AutomationCog(commands.Cog):
             return
         self._cooldowns[key] = now
 
-        parsed = await self._interpret(
-            message,
-            products=products,
-            provider_order=list(config.provider_order or []),
-        )
+        parsed = await self._interpret(message, products, list(config.provider_order or []))
         if parsed is not None:
-            await self._handle_interpreted(
+            await self._handle_ai(
                 message,
                 parsed,
-                products=products,
-                panel=panel,
-                support_channel_id=config.support_channel_id,
-                suggestions_channel_id=config.suggestions_channel_id,
+                products,
+                panel,
+                config.support_channel_id,
+                config.suggestions_channel_id,
             )
             return
-
-        handled = await self._deterministic_fallback(
-            message,
-            products=products,
-            suggestions_channel_id=config.suggestions_channel_id,
-        )
-        if not handled:
-            await self._support_reply(
-                message,
-                text=None,
-                support_channel_id=config.support_channel_id,
-            )
+        if not await self._fallback(message, products, config.suggestions_channel_id):
+            await self._support(message, None, config.support_channel_id)
 
 
 async def setup(bot: commands.Bot) -> None:
