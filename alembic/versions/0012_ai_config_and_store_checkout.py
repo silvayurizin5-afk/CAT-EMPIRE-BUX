@@ -1,6 +1,6 @@
 """AI channel configuration and configurable store checkout.
 
-Revision ID: 0012_ai_config_and_store_checkout
+Revision ID: 0012_ai_store_checkout
 Revises: 0011_order_payments
 """
 
@@ -9,7 +9,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0012_ai_config_and_store_checkout"
+revision: str = "0012_ai_store_checkout"
 down_revision: str | None = "0011_order_payments"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
