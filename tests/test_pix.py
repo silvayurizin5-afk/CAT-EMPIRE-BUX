@@ -2,6 +2,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.services.pix import (
+    DEFAULT_PIX_MERCHANT_CITY,
     PixConfig,
     build_pix_payload,
     crc16_ccitt,
@@ -14,7 +15,6 @@ def test_pix_payload_contains_dynamic_amount_key_and_txid() -> None:
     config = PixConfig(
         key="nextbuy@example.com",
         receiver_name="NEXTBUY STORE",
-        receiver_city="SAO PAULO",
     )
     payload = build_pix_payload(
         amount_brl=Decimal("65.00"),
@@ -25,6 +25,7 @@ def test_pix_payload_contains_dynamic_amount_key_and_txid() -> None:
     assert "nextbuy@example.com" in payload
     assert "540565.00" in payload
     assert "NB123ABC" in payload
+    assert DEFAULT_PIX_MERCHANT_CITY in payload
     assert payload.endswith(crc16_ccitt(payload[:-4]))
 
 

@@ -15,11 +15,17 @@ class PixConfigError(ValueError):
     pass
 
 
+# O campo Merchant City (ID 60) é obrigatório no BR Code. A NEXTBUY não coleta
+# mais a cidade do recebedor; usamos um valor técnico neutro apenas para manter
+# o payload estruturalmente válido.
+DEFAULT_PIX_MERCHANT_CITY = "NAO INFORMADO"
+
+
 @dataclass(slots=True, frozen=True)
 class PixConfig:
     key: str
     receiver_name: str
-    receiver_city: str
+    receiver_city: str = DEFAULT_PIX_MERCHANT_CITY
 
 
 @dataclass(slots=True, frozen=True)
@@ -56,16 +62,13 @@ def crc16_ccitt(value: str) -> str:
 def validate_pix_config() -> PixConfig:
     key = settings.pix_key.get_secret_value().strip()
     name = _ascii_upper(settings.pix_receiver_name, max_length=25)
-    city = _ascii_upper(settings.pix_receiver_city, max_length=15)
     if not key:
         raise PixConfigError("PIX_KEY não configurada")
     if len(key.encode("utf-8")) > 77:
         raise PixConfigError("PIX_KEY excede o limite permitido pelo BR Code")
     if not name:
         raise PixConfigError("PIX_RECEIVER_NAME não configurado")
-    if not city:
-        raise PixConfigError("PIX_RECEIVER_CITY não configurada")
-    return PixConfig(key=key, receiver_name=name, receiver_city=city)
+    return PixConfig(key=key, receiver_name=name)
 
 
 def txid_for_order(order_id: UUID) -> str:

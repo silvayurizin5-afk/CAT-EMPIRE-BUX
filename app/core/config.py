@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     # Pagamento atual: PIX estático por pedido, confirmado manualmente pela equipe.
     pix_key: SecretStr = SecretStr("")
     pix_receiver_name: str = ""
-    pix_receiver_city: str = ""
 
     # Integrações antigas mantidas somente para compatibilidade de histórico/webhooks legados.
     stripe_secret_key: SecretStr = SecretStr("")
