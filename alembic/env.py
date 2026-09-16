@@ -8,6 +8,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import settings
+from app.db.ai_models import AIConfig  # noqa: F401
 from app.db.audit_models import AuditDelivery  # noqa: F401
 from app.db.faq_models import AutoReplyButton  # noqa: F401
 from app.db.models import Base
