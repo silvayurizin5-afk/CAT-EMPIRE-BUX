@@ -6,20 +6,17 @@ import discord
 from sqlalchemy import select
 
 from app.bot.emoji import select_option_emoji
-from app.bot.views import store
+from app.bot.views.components_v2 import format_percent
 from app.bot.views.manual_pix import open_manual_pix_ticket
-from app.bot.views.profile import build_profile_embed
 from app.bot.views.terms_gate import require_current_terms
 from app.core.money import money
 from app.db.models import Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
 from app.services.calculator import format_brl
-from app.services.catalog import list_active_terms
 from app.services.manual_payments import cancel_manual_pix_order
 from app.services.orders import OutOfStockError
 from app.services.pix import PixConfigError, validate_pix_config
-from app.services.profiles import get_customer_profile
 from app.services.store_panel import (
     create_store_product_order,
     discounted_total,
@@ -30,18 +27,19 @@ from app.services.store_panel import (
 from app.services.users import get_or_create_user
 
 PIX_EMOJI = "<:PIX:1549632822388592663>"
+DEFAULT_ACCENT = 0x2B2D31
 
 
 def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> discord.Embed:
+    """Legacy admin preview. Public store messages use Components V2."""
     embed = discord.Embed(
         title=config.title or "NEXTBUY",
         description=config.description or "Selecione um produto abaixo.",
         color=config.color,
     )
-    embed.add_field(name="Produtos disponíveis", value=str(product_count), inline=True)
     embed.add_field(
-        name="Pagamento",
-        value=f"{PIX_EMOJI} PIX em reais • confirmação manual",
+        name=config.product_count_label or "Produtos disponíveis",
+        value=str(product_count),
         inline=True,
     )
     if config.image_url:
@@ -53,45 +51,55 @@ def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> dis
     return embed
 
 
-def build_product_checkout_embed(
+def _safe_checkout_title(config: StorePanelConfig, product: Product) -> str:
+    emoji = product.emoji or ""
+    try:
+        title = config.checkout_title_template.format(
+            emoji=emoji,
+            product=product.name,
+            game=product.game_name or "",
+        )
+    except (KeyError, ValueError):
+        title = f"{emoji} {product.name}"
+    return " ".join(title.split())[:256] or product.name
+
+
+def _store_intro(config: StorePanelConfig, product_count: int) -> str:
+    title = config.title or "NEXTBUY"
+    description = config.description or "Selecione um produto abaixo."
+    count_label = config.product_count_label or "Produtos disponíveis"
+    return f"## {title}\n{description}\n\n**{count_label}:** `{product_count}`"
+
+
+def _product_checkout_text(
+    config: StorePanelConfig,
     product: Product,
     *,
     coupon_code: str | None = None,
     discount_percent: Decimal | None = None,
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=product.name,
-        description=product.description or "Confira os detalhes antes de comprar.",
-        color=discord.Color.from_rgb(43, 45, 49),
-    )
-    embed.add_field(name="Jogo", value=product.game_name or "—", inline=True)
+) -> str:
+    lines = [
+        f"## {_safe_checkout_title(config, product)}",
+        config.checkout_description or "Confira os detalhes antes de continuar com a compra.",
+    ]
+    if product.game_name:
+        lines.append(f"**Jogo:** {product.game_name}")
+    if product.description:
+        lines.append(product.description)
+
     if product.price_credits is None:
-        embed.add_field(name="Preço", value="Indisponível", inline=True)
+        lines.append(f"**{PIX_EMOJI} Preço:** Indisponível")
     else:
         original = money(product.price_credits)
-        if coupon_code and discount_percent:
+        if coupon_code and discount_percent is not None:
             final = discounted_total(original, discount_percent)
-            embed.add_field(
-                name=f"{PIX_EMOJI} Preço",
-                value=f"~~{format_brl(original)}~~\n**`{format_brl(final)}`**",
-                inline=True,
-            )
-            embed.add_field(
-                name="Cupom",
-                value=f"`{coupon_code}` • {discount_percent:.2f}% de desconto",
-                inline=False,
+            lines.append(f"**{PIX_EMOJI} Preço:** ~~{format_brl(original)}~~ → **`{format_brl(final)}`**")
+            lines.append(
+                f"**Cupom:** `{coupon_code}` • **{format_percent(discount_percent)}** de desconto"
             )
         else:
-            embed.add_field(
-                name=f"{PIX_EMOJI} Preço",
-                value=f"`{format_brl(original)}`",
-                inline=True,
-            )
-    stock = "Ilimitado" if product.stock_quantity is None else str(product.stock_quantity)
-    embed.add_field(name="Estoque", value=stock, inline=True)
-    if product.image_url:
-        embed.set_image(url=product.image_url)
-    return embed
+            lines.append(f"**{PIX_EMOJI} Preço:** **`{format_brl(original)}`**")
+    return "\n\n".join(line for line in lines if line)
 
 
 class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
@@ -113,41 +121,99 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
         await interaction.response.defer()
         async with SessionLocal() as session:
             product = await session.get(Product, self.product_id)
+            config = await get_or_create_store_panel(session, interaction.guild.id)
             coupon = await get_coupon_by_code(
                 session,
                 guild_id=interaction.guild.id,
                 code=str(self.code),
             )
         if product is None or product.guild_id != interaction.guild.id or not product.active:
-            await interaction.edit_original_response(content="Produto indisponível.")
+            await interaction.edit_original_response(
+                view=StoreNoticeView("Produto indisponível."),
+                content=None,
+                embed=None,
+            )
             return
         if coupon is None:
             await interaction.edit_original_response(
-                content="Cupom inválido, desativado ou sem usos disponíveis."
+                view=StoreNoticeView("Cupom inválido, desativado ou sem usos disponíveis."),
+                content=None,
+                embed=None,
             )
             return
         await interaction.edit_original_response(
-            embed=build_product_checkout_embed(
-                product,
-                coupon_code=coupon.code,
-                discount_percent=coupon.discount_percent,
-            ),
+            content=None,
+            embed=None,
             view=ConfiguredProductCheckoutView(
-                product_id=product.id,
+                config=config,
+                product=product,
                 owner_id=self.owner_id,
                 coupon_id=coupon.id,
+                coupon_code=coupon.code,
+                discount_percent=coupon.discount_percent,
             ),
         )
 
 
-class ConfiguredProductCheckoutView(discord.ui.View):
-    def __init__(self, *, product_id: int, owner_id: int, coupon_id: int | None = None) -> None:
+class StoreNoticeView(discord.ui.LayoutView):
+    def __init__(self, text: str) -> None:
+        super().__init__(timeout=120)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(text[:4000]),
+                accent_color=DEFAULT_ACCENT,
+            )
+        )
+
+
+class ConfiguredProductCheckoutView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        config: StorePanelConfig,
+        product: Product,
+        owner_id: int,
+        coupon_id: int | None = None,
+        coupon_code: str | None = None,
+        discount_percent: Decimal | None = None,
+    ) -> None:
         super().__init__(timeout=300)
-        self.product_id = product_id
+        self.product_id = product.id
         self.owner_id = owner_id
         self.coupon_id = coupon_id
         self._lock = asyncio.Lock()
         self._order_id: UUID | None = None
+
+        buy = discord.ui.Button(
+            label=(config.buy_button_label or "Comprar")[:80],
+            style=discord.ButtonStyle.success,
+            custom_id=f"nextbuy:checkout:{product.id}:buy",
+        )
+        buy.callback = self._confirm
+        coupon = discord.ui.Button(
+            label=(config.coupon_button_label or "Adicionar cupom")[:80],
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"nextbuy:checkout:{product.id}:coupon",
+        )
+        coupon.callback = self._coupon
+        row = discord.ui.ActionRow(buy, coupon)
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                _product_checkout_text(
+                    config,
+                    product,
+                    coupon_code=coupon_code,
+                    discount_percent=discount_percent,
+                )[:4000]
+            )
+        ]
+        if product.image_url:
+            gallery = discord.ui.MediaGallery()
+            gallery.add_item(media=product.image_url, description=product.name[:256])
+            children.append(gallery)
+        children.append(row)
+        self.add_item(discord.ui.Container(*children, accent_color=config.color or DEFAULT_ACCENT))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner_id:
@@ -155,8 +221,7 @@ class ConfiguredProductCheckoutView(discord.ui.View):
         await interaction.response.send_message("Essa compra pertence a outro cliente.", ephemeral=True)
         return False
 
-    @discord.ui.button(label="Comprar", style=discord.ButtonStyle.success, row=0)
-    async def confirm(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    async def _confirm(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -167,21 +232,21 @@ class ConfiguredProductCheckoutView(discord.ui.View):
             validate_pix_config()
         except PixConfigError:
             await interaction.edit_original_response(
-                content=(
-                    "O pagamento PIX ainda não foi configurado pela equipe. "
-                    "Defina PIX_KEY e PIX_RECEIVER_NAME no ambiente do bot."
-                ),
+                content=None,
                 embed=None,
-                view=None,
+                view=StoreNoticeView(
+                    "O pagamento PIX ainda não foi configurado pela equipe. "
+                    "Defina `PIX_KEY` e `PIX_RECEIVER_NAME` no ambiente do bot."
+                ),
             )
             return
 
         async with self._lock:
             if self._order_id is not None:
                 await interaction.edit_original_response(
-                    content=f"Essa compra já foi criada: `{str(self._order_id)[:8]}`.",
+                    content=None,
                     embed=None,
-                    view=None,
+                    view=StoreNoticeView("Essa compra já foi criada. Confira o canal de pagamento."),
                 )
                 return
             try:
@@ -200,14 +265,16 @@ class ConfiguredProductCheckoutView(discord.ui.View):
                 self._order_id = order.id
             except OutOfStockError:
                 await interaction.edit_original_response(
-                    content="Esse produto ficou sem estoque.", embed=None, view=None
+                    content=None,
+                    embed=None,
+                    view=StoreNoticeView("Esse produto ficou sem estoque."),
                 )
                 return
             except ValueError as exc:
                 await interaction.edit_original_response(
-                    content=str(exc) or "Não consegui criar o pedido agora.",
+                    content=None,
                     embed=None,
-                    view=None,
+                    view=StoreNoticeView(str(exc) or "Não consegui criar o pedido agora."),
                 )
                 return
 
@@ -223,12 +290,12 @@ class ConfiguredProductCheckoutView(discord.ui.View):
                 )
             self._order_id = None
             await interaction.edit_original_response(
-                content=(
+                content=None,
+                embed=None,
+                view=StoreNoticeView(
                     "Não consegui abrir o canal privado de pagamento. "
                     "O pedido foi cancelado e o estoque foi devolvido."
                 ),
-                embed=None,
-                view=None,
             )
             return
 
@@ -242,25 +309,24 @@ class ConfiguredProductCheckoutView(discord.ui.View):
                 )
             self._order_id = None
             await interaction.edit_original_response(
-                content="Não consegui criar o canal de pagamento. O pedido foi cancelado.",
+                content=None,
                 embed=None,
-                view=None,
+                view=StoreNoticeView("Não consegui criar o canal de pagamento. O pedido foi cancelado."),
             )
             return
 
-        coupon_text = f" • cupom `{coupon.code}`" if coupon is not None else ""
+        coupon_text = f" com cupom `{coupon.code}`" if coupon is not None else ""
         await interaction.edit_original_response(
-            content=(
-                f"Pedido `{str(order.id)[:8]}` • **{format_brl(order.total_credits)}**"
-                f"{coupon_text}. O QR Code e o PIX Copia e Cola estão em {ticket.mention}. "
-                "Depois de pagar, aguarde a confirmação manual da equipe."
-            ),
+            content=None,
             embed=None,
-            view=None,
+            view=StoreNoticeView(
+                f"**{product.name}** • **`{format_brl(order.total_credits)}`**{coupon_text}\n\n"
+                f"O QR Code e o PIX Copia e Cola estão em {ticket.mention}. "
+                "Depois de pagar, aguarde a confirmação da equipe."
+            ),
         )
 
-    @discord.ui.button(label="Adicionar cupom", style=discord.ButtonStyle.secondary, row=0)
-    async def coupon(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    async def _coupon(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(
             CouponModal(product_id=self.product_id, owner_id=self.owner_id)
         )
@@ -275,12 +341,16 @@ class StoreProductSelect(discord.ui.Select):
                 if product.price_credits is None
                 else format_brl(money(product.price_credits))
             )
-            stock = "∞" if product.stock_quantity is None else str(product.stock_quantity)
+            if product.product_type.startswith("robux"):
+                description = price
+            else:
+                stock = "∞" if product.stock_quantity is None else str(product.stock_quantity)
+                description = f"{price} • estoque {stock}"
             options.append(
                 discord.SelectOption(
                     label=product.name[:100],
                     value=str(product.id),
-                    description=f"{price} • estoque {stock}"[:100],
+                    description=description[:100],
                     emoji=select_option_emoji(product.emoji),
                 )
             )
@@ -298,7 +368,6 @@ class StoreProductSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            row=0,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -309,8 +378,9 @@ class StoreProductSelect(discord.ui.Select):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         product_id = int(self.values[0])
-        async with SessionLocal() as session:
+        async with SessionLocal() as session, session.begin():
             product = await session.get(Product, product_id)
+            config = await get_or_create_store_panel(session, interaction.guild.id)
         if (
             product is None
             or product.guild_id != interaction.guild.id
@@ -318,67 +388,48 @@ class StoreProductSelect(discord.ui.Select):
             or product.price_credits is None
             or (product.stock_quantity is not None and product.stock_quantity <= 0)
         ):
-            await interaction.edit_original_response(content="Produto indisponível.", embed=None, view=None)
+            await interaction.edit_original_response(
+                content=None,
+                embed=None,
+                view=StoreNoticeView("Produto indisponível."),
+            )
             return
         await interaction.edit_original_response(
-            embed=build_product_checkout_embed(product),
+            content=None,
+            embed=None,
             view=ConfiguredProductCheckoutView(
-                product_id=product.id,
+                config=config,
+                product=product,
                 owner_id=interaction.user.id,
             ),
         )
 
 
-class StorePanelView(discord.ui.View):
+class StorePanelView(discord.ui.LayoutView):
     def __init__(self, *, config: StorePanelConfig, products: list[Product]) -> None:
         super().__init__(timeout=None)
-        self.add_item(StoreProductSelect(products, config.product_placeholder))
+        select = StoreProductSelect(products, config.product_placeholder)
+        row = discord.ui.ActionRow(select)
 
-        profile = discord.ui.Button(
-            label=config.profile_label[:80] or "Meu perfil",
-            style=discord.ButtonStyle.secondary,
-            custom_id="nextbuy:store:configured-profile",
-            row=1,
-        )
-        profile.callback = self._profile
-        self.add_item(profile)
-
-        terms = discord.ui.Button(
-            label=config.terms_label[:80] or "Termos",
-            style=discord.ButtonStyle.secondary,
-            custom_id="nextbuy:store:configured-terms",
-            row=1,
-        )
-        terms.callback = self._terms
-        self.add_item(terms)
-
-    async def _profile(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            return
-        async with SessionLocal() as session:
-            profile = await get_customer_profile(
-                session,
-                guild_id=interaction.guild.id,
-                discord_user_id=interaction.user.id,
+        intro = discord.ui.TextDisplay(_store_intro(config, len(products))[:4000])
+        children: list[discord.ui.Item] = []
+        if config.thumbnail_url:
+            children.append(
+                discord.ui.Section(
+                    intro,
+                    accessory=discord.ui.Thumbnail(config.thumbnail_url, description=config.title[:256]),
+                )
             )
-        await interaction.response.send_message(
-            embed=build_profile_embed(interaction.user.display_name, profile),
-            ephemeral=True,
-        )
-
-    async def _terms(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            return
-        async with SessionLocal() as session:
-            terms = await list_active_terms(session, guild_id=interaction.guild.id)
-        if not terms:
-            await interaction.response.send_message("Nenhum termo configurado.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "Selecione o termo que quer ler:",
-            view=store.TermsView(terms),
-            ephemeral=True,
-        )
+        else:
+            children.append(intro)
+        if config.image_url:
+            gallery = discord.ui.MediaGallery()
+            gallery.add_item(media=config.image_url, description=(config.title or "NEXTBUY")[:256])
+            children.append(gallery)
+        children.append(row)
+        if config.footer_text:
+            children.append(discord.ui.TextDisplay(f"-# {config.footer_text}"[:4000]))
+        self.add_item(discord.ui.Container(*children, accent_color=config.color or DEFAULT_ACCENT))
 
 
 async def load_store_panel_view(guild_id: int) -> tuple[StorePanelConfig, list[Product]]:
@@ -397,7 +448,6 @@ async def publish_store_panel(
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, interaction.guild.id)
         products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
-        embed = build_store_panel_embed(config, len(products))
         view = StorePanelView(config=config, products=products)
 
         message: discord.Message | None = None
@@ -407,12 +457,12 @@ async def publish_store_panel(
                 try:
                     old_message = await old_channel.fetch_message(config.published_message_id)
                     if old_channel.id == channel.id:
-                        await old_message.edit(embed=embed, view=view)
+                        await old_message.edit(content=None, embed=None, view=view)
                         message = old_message
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     message = None
         if message is None:
-            message = await channel.send(embed=embed, view=view)
+            message = await channel.send(view=view)
         config.published_channel_id = channel.id
         config.published_message_id = message.id
         await session.flush()
@@ -427,7 +477,6 @@ async def refresh_published_store_panel(guild: discord.Guild) -> bool:
         if config is None or not config.published_channel_id or not config.published_message_id:
             return False
         products = await list_store_products(session, guild_id=guild.id, config=config)
-        embed = build_store_panel_embed(config, len(products))
         view = StorePanelView(config=config, products=products)
         channel_id = config.published_channel_id
         message_id = config.published_message_id
@@ -437,7 +486,7 @@ async def refresh_published_store_panel(guild: discord.Guild) -> bool:
         return False
     try:
         message = await channel.fetch_message(message_id)
-        await message.edit(embed=embed, view=view)
+        await message.edit(content=None, embed=None, view=view)
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         return False
     return True
