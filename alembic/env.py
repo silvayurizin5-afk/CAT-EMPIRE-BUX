@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.db.audit_models import AuditDelivery  # noqa: F401
 from app.db.faq_models import AutoReplyButton  # noqa: F401
 from app.db.models import Base
+from app.db.order_payment_models import OrderPayment  # noqa: F401
 from app.db.payment_models import TopUpNotification  # noqa: F401
 from app.db.risk_models import CommerceLock  # noqa: F401
 from app.db.store_models import StoreCoupon, StorePanelConfig  # noqa: F401
