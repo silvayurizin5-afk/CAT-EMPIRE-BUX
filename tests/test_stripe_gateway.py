@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 import stripe
 
-from app.core.config import settings
 from app.integrations.stripe_gateway import (
     StripeGateway,
     StripeWebhookError,
@@ -32,7 +31,6 @@ async def test_checkout_session_uses_dynamic_payment_methods_and_metadata(monkey
         return SimpleNamespace(id="cs_test_123", url="https://checkout.stripe.test/session")
 
     monkeypatch.setattr(stripe.checkout.Session, "create", fake_create)
-    monkeypatch.setattr(settings, "stripe_credits_product_id", "prod_test_credits")
 
     topup_id = uuid4()
     checkout = await StripeGateway(secret_key="sk_test_fake").create_credit_checkout(
@@ -44,9 +42,12 @@ async def test_checkout_session_uses_dynamic_payment_methods_and_metadata(monkey
     assert checkout.checkout_url == "https://checkout.stripe.test/session"
     assert captured["mode"] == "payment"
     assert captured["client_reference_id"] == str(topup_id)
-    assert captured["line_items"][0]["price_data"]["currency"] == "brl"
-    assert captured["line_items"][0]["price_data"]["unit_amount"] == 1080
-    assert captured["line_items"][0]["price_data"]["product"] == "prod_test_credits"
+    price_data = captured["line_items"][0]["price_data"]
+    assert price_data["currency"] == "brl"
+    assert price_data["unit_amount"] == 1080
+    assert "product" not in price_data
+    assert price_data["product_data"]["name"] == "NEXTBUY"
+    assert price_data["product_data"]["description"] == "Pagamento NEXTBUY"
     assert captured["metadata"]["topup_id"] == str(topup_id)
     assert captured["payment_intent_data"]["metadata"]["topup_id"] == str(topup_id)
     assert "payment_method_types" not in captured
