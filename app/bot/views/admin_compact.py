@@ -1,20 +1,12 @@
 import discord
-from sqlalchemy import func, select
 
 from app.bot.views.admin_feedback import FeedbackSettingsModal
-from app.bot.views.admin_forms import (
-    AutoReplyModal,
-    ConfigTargetView,
-    RankRoleView,
-    TermsModal,
-)
-from app.bot.views.automation_admin import send_auto_reply_management
+from app.bot.views.admin_forms import ConfigTargetView, RankRoleView, TermsModal
 from app.bot.views.embed_builder import send_embed_builder
 from app.bot.views.rank_admin import send_rank_tier_management
 from app.bot.views.store_panel_admin import send_store_panel_admin
 from app.bot.views.terms_admin import send_terms_management
 from app.bot.views.ticket_admin import TicketMessagesModal
-from app.db.models import Feedback, Order
 from app.db.session import SessionLocal
 from app.services.configs import get_or_create_guild_config
 from app.services.ticket_settings import get_effective_ticket_settings
@@ -24,12 +16,9 @@ ADMIN_ACTIONS = (
     (
         "store_panel",
         "Configurar loja",
-        "Embed, produtos, cupons, preços, estoques e publicação",
+        "Painel, produtos, cupons, preços, estoques e publicação",
     ),
-    ("store_summary", "Resumo da loja", "Pedidos, entregas e feedbacks"),
-    ("embed_builder", "Criar embed avulsa", "Abrir o editor visual com prévia ao vivo"),
-    ("new_faq", "Criar resposta automática", "Cadastrar uma nova resposta do FAQ"),
-    ("manage_faq", "Gerenciar FAQ", "Editar respostas e botões"),
+    ("embed_builder", "Criar mensagem visual", "Abrir o editor visual com prévia ao vivo"),
     ("feedback", "Configurar feedbacks", "Emoji, lembretes e permissões"),
     ("ticket_messages", "Mensagens dos tickets", "Editar textos automáticos dos pedidos"),
     ("new_terms", "Criar ou atualizar termo", "Cadastrar uma nova versão de termo"),
@@ -38,7 +27,7 @@ ADMIN_ACTIONS = (
     ("manage_ranks", "Gerenciar faixas", "Editar metas e ativação"),
     ("publish_ranking", "Publicar ranking", "Publicar ou atualizar no canal atual"),
     ("roles", "Configurar cargos", "Administrador, suporte, entrega e cliente"),
-    ("channels", "Configurar canais", "Tickets, entregas, FAQ, ranking e logs"),
+    ("channels", "Configurar canais", "Tickets, entregas, ranking e logs"),
 )
 
 
@@ -46,19 +35,19 @@ def build_admin_embed() -> discord.Embed:
     embed = discord.Embed(
         title="NEXTBUY • Administração",
         description=(
-            "Selecione abaixo o que deseja configurar. A loja fica centralizada em "
-            "uma única área, sem cotações ou créditos internos."
+            "Selecione abaixo o que deseja configurar. A IA não fica neste painel: "
+            "use **/ia configurar** para definir os canais autorizados, suporte e sugestões."
         ),
         color=discord.Color.from_rgb(43, 45, 49),
     )
     embed.add_field(
         name="Loja",
-        value="Embed única, produtos, cupons, preços em reais, estoques e publicação.",
+        value="Painel, produtos, cupons, preços em reais, estoques e publicação.",
         inline=False,
     )
     embed.add_field(
         name="Automação",
-        value="Calculadora, FAQ, feedbacks, tickets, termos e faixas de cliente.",
+        value="IA por canais autorizados, feedbacks, tickets, termos e faixas de cliente.",
         inline=False,
     )
     embed.add_field(
@@ -67,45 +56,6 @@ def build_admin_embed() -> discord.Embed:
         inline=False,
     )
     embed.set_footer(text="Painel privado • alterações valem para este servidor")
-    return embed
-
-
-async def build_store_summary(guild_id: int) -> discord.Embed:
-    async with SessionLocal() as session:
-        delivered = await session.scalar(
-            select(func.count(Order.id)).where(
-                Order.guild_id == guild_id,
-                Order.status == "delivered",
-            )
-        )
-        pending = await session.scalar(
-            select(func.count(Order.id)).where(
-                Order.guild_id == guild_id,
-                Order.status == "pending",
-            )
-        )
-        confirmed = await session.scalar(
-            select(func.count(Order.id)).where(
-                Order.guild_id == guild_id,
-                Order.status.in_(["paid", "processing"]),
-            )
-        )
-        feedbacks = await session.scalar(
-            select(func.count(Feedback.id))
-            .join(Order, Feedback.order_id == Order.id)
-            .where(Order.guild_id == guild_id)
-        )
-
-    embed = discord.Embed(
-        title="NEXTBUY • Resumo da loja",
-        description="Visão rápida da operação atual.",
-        color=discord.Color.from_rgb(43, 45, 49),
-    )
-    embed.add_field(name="Entregues", value=str(delivered or 0), inline=True)
-    embed.add_field(name="Pendentes", value=str(pending or 0), inline=True)
-    embed.add_field(name="Confirmados", value=str(confirmed or 0), inline=True)
-    embed.add_field(name="Feedbacks", value=str(feedbacks or 0), inline=True)
-    embed.set_footer(text="Confirmados = pagos/processando e ainda não entregues")
     return embed
 
 
@@ -152,13 +102,6 @@ class CompactAdminPanelView(discord.ui.View):
             await send_store_panel_admin(interaction)
             return
 
-        if action == "store_summary":
-            await interaction.response.send_message(
-                embed=await build_store_summary(interaction.guild.id),
-                ephemeral=True,
-            )
-            return
-
         if action == "roles":
             await interaction.response.send_message(
                 "Escolha qual cargo configurar:",
@@ -173,14 +116,6 @@ class CompactAdminPanelView(discord.ui.View):
                 view=ConfigTargetView(kind="channel"),
                 ephemeral=True,
             )
-            return
-
-        if action == "new_faq":
-            await interaction.response.send_modal(AutoReplyModal())
-            return
-
-        if action == "manage_faq":
-            await send_auto_reply_management(interaction)
             return
 
         if action == "feedback":
