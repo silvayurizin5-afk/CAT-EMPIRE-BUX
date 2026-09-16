@@ -33,6 +33,24 @@ def _accent(config: StorePanelConfig) -> discord.Colour:
     return discord.Colour(config.color)
 
 
+def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> discord.Embed:
+    """Prévia legada usada apenas pelo painel administrativo durante a migração V2."""
+    embed = discord.Embed(
+        title=config.title or "NEXTBUY",
+        description=config.description or "Selecione um produto abaixo.",
+        color=config.color,
+    )
+    if config.product_count_label:
+        embed.add_field(name=config.product_count_label, value=str(product_count), inline=False)
+    if config.image_url:
+        embed.set_image(url=config.image_url)
+    if config.thumbnail_url:
+        embed.set_thumbnail(url=config.thumbnail_url)
+    if config.footer_text:
+        embed.set_footer(text=config.footer_text)
+    return embed
+
+
 def _product_title(config: StorePanelConfig, product: Product) -> str:
     emoji = (product.emoji or "").strip()
     template = config.checkout_title_template or "{emoji} {product}"
