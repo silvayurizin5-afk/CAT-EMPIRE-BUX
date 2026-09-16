@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 import discord
 from sqlalchemy.exc import IntegrityError
 
+from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.views.terms_admin import CompleteAdminPanelView
 from app.bot.workflows.feedback_permissions import (
     FeedbackPermissionSyncError,
@@ -11,6 +12,7 @@ from app.bot.workflows.feedback_permissions import (
 from app.db.models import RankTier
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
+from app.services.calculator import format_brl
 from app.services.ranks import (
     list_all_rank_tiers,
     set_rank_tier_active,
@@ -27,16 +29,23 @@ async def _sync_feedback_permissions_after_response(interaction: discord.Interac
         await interaction.followup.send(f"Aviso: {exc}", ephemeral=True)
 
 
-def build_rank_tier_embed(tier: RankTier, guild: discord.Guild | None = None) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"Faixa • {tier.name}",
-        description="Ativa" if tier.active else "Desativada",
-    )
-    embed.add_field(name="Meta", value=f"{tier.min_spend:.2f} créditos")
+def _rank_lines(tier: RankTier, guild: discord.Guild | None = None) -> list[str]:
     role = guild.get_role(tier.role_id) if guild is not None else None
-    embed.add_field(name="Cargo", value=role.mention if role else f"`{tier.role_id}`")
-    embed.add_field(name="DM ao alcançar", value=tier.dm_message or "—", inline=False)
-    return embed
+    return [
+        f"**Status:** `{'Ativa' if tier.active else 'Desativada'}`",
+        f"**Meta:** `{format_brl(tier.min_spend)}`",
+        f"**Cargo:** {role.mention if role else f'`{tier.role_id}`'}",
+        f"**DM ao alcançar:** {tier.dm_message or '—'}",
+    ]
+
+
+def build_rank_tier_embed(tier: RankTier, guild: discord.Guild | None = None) -> discord.Embed:
+    """Compatibilidade com telas antigas; a interface ativa usa Components V2."""
+    return discord.Embed(
+        title=f"Faixa • {tier.name}",
+        description="\n".join(_rank_lines(tier, guild)),
+        color=discord.Color.from_rgb(43, 45, 49),
+    )
 
 
 class RankTierEditModal(discord.ui.Modal):
@@ -49,7 +58,7 @@ class RankTierEditModal(discord.ui.Modal):
             default=tier.name[:80],
         )
         self.min_spend_input = discord.ui.TextInput(
-            label="Meta em créditos",
+            label="Meta em reais",
             max_length=20,
             default=f"{tier.min_spend:.2f}",
         )
@@ -73,11 +82,12 @@ class RankTierEditModal(discord.ui.Modal):
             await interaction.response.send_message("Meta inválida.", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             async with SessionLocal() as session, session.begin():
                 tier = await session.get(RankTier, self.tier_id)
                 if tier is None or tier.guild_id != interaction.guild.id:
-                    await interaction.response.send_message("Faixa não encontrada.", ephemeral=True)
+                    await interaction.edit_original_response(content="Faixa não encontrada.")
                     return
                 was_active = tier.active
                 updated = await upsert_rank_tier(
@@ -104,14 +114,13 @@ class RankTierEditModal(discord.ui.Modal):
                     },
                 )
         except (ValueError, IntegrityError) as exc:
-            await interaction.response.send_message(
-                f"Não foi possível atualizar a faixa: {exc}", ephemeral=True
+            await interaction.edit_original_response(
+                content=f"Não foi possível atualizar a faixa: {exc}"
             )
             return
 
-        await interaction.response.send_message(
-            "Faixa atualizada. Reabra **Gerenciar faixas** para conferir.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content="Faixa atualizada. Reabra **Gerenciar faixas** para conferir."
         )
         await _sync_feedback_permissions_after_response(interaction)
 
@@ -136,10 +145,11 @@ class RankTierActionsView(discord.ui.View):
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             tier = await session.get(RankTier, self.tier_id)
             if tier is None or tier.guild_id != interaction.guild.id:
-                await interaction.response.send_message("Faixa não encontrada.", ephemeral=True)
+                await interaction.edit_original_response(content="Faixa não encontrada.", view=None)
                 return
             await set_rank_tier_active(session, tier=tier, active=not tier.active)
             await write_audit_log(
@@ -151,12 +161,33 @@ class RankTierActionsView(discord.ui.View):
                 target_id=str(tier.id),
                 details={"active": tier.active, "role_id": tier.role_id},
             )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=None,
-            embed=build_rank_tier_embed(tier, interaction.guild),
-            view=RankTierActionsView(tier.id),
+            embeds=[],
+            view=RankTierActionsLayout(tier, interaction.guild),
         )
         await _sync_feedback_permissions_after_response(interaction)
+
+
+class RankTierActionsLayout(discord.ui.LayoutView):
+    def __init__(self, tier: RankTier, guild: discord.Guild | None) -> None:
+        super().__init__(timeout=180)
+        card = CardLayout(
+            title=f"Faixa • {tier.name}",
+            lines=_rank_lines(tier, guild),
+            footer="NEXTBUY • Faixas",
+            timeout=180,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+
+        legacy = RankTierActionsView(tier.id)
+        buttons = list(legacy.children)
+        for item in buttons:
+            legacy.remove_item(item)
+        if buttons:
+            add_action_row(self.container, *buttons)
 
 
 class RankTierManageSelect(discord.ui.Select):
@@ -166,7 +197,7 @@ class RankTierManageSelect(discord.ui.Select):
                 label=tier.name[:100],
                 value=str(tier.id),
                 description=(
-                    f"{tier.min_spend:.2f} créditos • "
+                    f"{format_brl(tier.min_spend)} • "
                     f"{'ativa' if tier.active else 'desativada'}"
                 )[:100],
             )
@@ -177,40 +208,50 @@ class RankTierManageSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         tier_id = int(self.values[0])
         async with SessionLocal() as session:
             tier = await session.get(RankTier, tier_id)
         if tier is None or tier.guild_id != interaction.guild.id:
-            await interaction.response.edit_message(content="Faixa não encontrada.", view=None)
+            await interaction.edit_original_response(content="Faixa não encontrada.", view=None)
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=None,
-            embed=build_rank_tier_embed(tier, interaction.guild),
-            view=RankTierActionsView(tier.id),
+            embeds=[],
+            view=RankTierActionsLayout(tier, interaction.guild),
         )
 
 
-class RankTierManagementView(discord.ui.View):
+class RankTierManagementView(discord.ui.LayoutView):
     def __init__(self, tiers: list[RankTier]) -> None:
         super().__init__(timeout=180)
-        self.add_item(RankTierManageSelect(tiers))
+        card = CardLayout(
+            title="Gerenciar faixas",
+            description="Escolha uma faixa para editar ou ativar/desativar.",
+            timeout=180,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+        add_select_row(self.container, RankTierManageSelect(tiers))
 
 
 async def send_rank_tier_management(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
+    await interaction.response.defer(ephemeral=True, thinking=True)
     async with SessionLocal() as session:
         tiers = await list_all_rank_tiers(session, guild_id=interaction.guild.id)
     if not tiers:
-        await interaction.response.send_message(
-            "Nenhuma faixa cadastrada. Use **Faixa de cliente** primeiro.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content="Nenhuma faixa cadastrada. Use **Faixa de cliente** primeiro.",
+            view=None,
         )
         return
-    await interaction.response.send_message(
-        "Escolha uma faixa para editar ou ativar/desativar:",
+    await interaction.edit_original_response(
+        content=None,
+        embeds=[],
         view=RankTierManagementView(tiers),
-        ephemeral=True,
     )
 
 
