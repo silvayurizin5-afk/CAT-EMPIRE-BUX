@@ -13,6 +13,7 @@ from app.db.faq_models import AutoReplyButton  # noqa: F401
 from app.db.models import Base
 from app.db.payment_models import TopUpNotification  # noqa: F401
 from app.db.risk_models import CommerceLock  # noqa: F401
+from app.db.store_models import StoreCoupon, StorePanelConfig  # noqa: F401
 from app.db.ticket_models import TicketSettings  # noqa: F401
 
 config = context.config
