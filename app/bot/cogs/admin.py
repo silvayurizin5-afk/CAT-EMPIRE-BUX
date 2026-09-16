@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from app.bot.checks import can_admin
-from app.bot.views.admin_compact import CompactAdminPanelView, build_admin_embed
+from app.bot.views.admin_compact_v2 import CompactAdminPanelView, build_admin_embed
 
 
 class AdminCog(commands.Cog):
