@@ -5,6 +5,7 @@ from discord.ext import commands
 
 from app.bot.views.profile import LeaderboardView
 from app.bot.views.store import StoreHomeView
+from app.bot.views.store_panel import restore_store_panel_views
 from app.bot.workflows.feedback_permissions import (
     FeedbackPermissionSyncError,
     sync_feedback_channel_permissions,
@@ -55,6 +56,7 @@ class NextBuyBot(commands.Bot):
         self.add_view(StoreHomeView())
         self.add_view(LeaderboardView())
         await self._restore_ticket_views()
+        await restore_store_panel_views(self)
         if settings.discord_guild_id:
             guild = discord.Object(id=settings.discord_guild_id)
             self.tree.copy_global_to(guild=guild)
