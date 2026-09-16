@@ -8,7 +8,7 @@ from app.bot.workflows.feedback_permissions import (
     sync_feedback_channel_permissions,
 )
 from app.db.session import SessionLocal
-from app.services.catalog import create_product, upsert_robux_rate, upsert_terms
+from app.services.catalog import create_product, upsert_terms
 from app.services.configs import get_or_create_guild_config
 from app.services.faq import upsert_auto_reply
 from app.services.ranks import upsert_rank_tier
@@ -123,9 +123,9 @@ class ProductModal(discord.ui.Modal, title="Criar produto"):
     name = discord.ui.TextInput(label="Nome", max_length=120)
     slug = discord.ui.TextInput(label="Identificador", placeholder="ex: blox-fruits-gp", max_length=140)
     product_type = discord.ui.TextInput(
-        label="Tipo", placeholder="item, robux ou gamepass", max_length=24
+        label="Tipo", placeholder="item ou gamepass", max_length=24
     )
-    price = discord.ui.TextInput(label="Preço em créditos", placeholder="10,80", max_length=20)
+    price = discord.ui.TextInput(label="Preço em reais", placeholder="10,80", max_length=20)
     game_name = discord.ui.TextInput(label="Jogo", required=False, max_length=120)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -153,44 +153,12 @@ class ProductModal(discord.ui.Modal, title="Criar produto"):
             )
             return
         await interaction.response.send_message(
-            f"Produto **{product.name}** criado por **{product.price_credits:.2f} créditos**.",
+            f"Produto **{product.name}** criado por **R$ {product.price_credits:.2f}**.",
             ephemeral=True,
         )
         from app.bot.views.store_panel import refresh_published_store_panel
 
         await refresh_published_store_panel(interaction.guild)
-
-
-class RobuxRateModal(discord.ui.Modal, title="Configurar cotação de Robux"):
-    code = discord.ui.TextInput(label="Código", placeholder="instantaneo", max_length=40)
-    label = discord.ui.TextInput(label="Nome exibido", placeholder="Robux instantâneo", max_length=80)
-    price = discord.ui.TextInput(
-        label="Créditos por 1 Robux", placeholder="0,029000", max_length=24
-    )
-    delivery = discord.ui.TextInput(
-        label="Prazo/descrição", placeholder="Cai na hora", required=False, max_length=120
-    )
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            return
-        try:
-            price = Decimal(str(self.price).replace(",", "."))
-            if price <= 0:
-                raise InvalidOperation
-        except (InvalidOperation, ValueError):
-            await interaction.response.send_message("Cotação inválida.", ephemeral=True)
-            return
-        async with SessionLocal() as session, session.begin():
-            rate = await upsert_robux_rate(
-                session,
-                guild_id=interaction.guild.id,
-                code=str(self.code),
-                label=str(self.label),
-                price_per_robux=price,
-                delivery_label=str(self.delivery),
-            )
-        await interaction.response.send_message(f"Cotação **{rate.label}** salva.", ephemeral=True)
 
 
 class TermsModal(discord.ui.Modal, title="Criar/atualizar termo"):
@@ -222,7 +190,7 @@ class AutoReplyModal(discord.ui.Modal, title="Resposta automática"):
     name = discord.ui.TextInput(label="Nome", placeholder="Pagamento", max_length=80)
     keywords = discord.ui.TextInput(
         label="Palavras-chave",
-        placeholder="pagamento, recarga, créditos",
+        placeholder="pagamento, pedido, pix",
         max_length=500,
     )
     title_text = discord.ui.TextInput(label="Título do embed", max_length=160)
@@ -258,9 +226,7 @@ class AutoReplyModal(discord.ui.Modal, title="Resposta automática"):
 
 class RankTierModal(discord.ui.Modal, title="Faixa de cliente"):
     name = discord.ui.TextInput(label="Nome", placeholder="VIP", max_length=80)
-    min_spend = discord.ui.TextInput(
-        label="Meta em créditos", placeholder="5000,00", max_length=20
-    )
+    min_spend = discord.ui.TextInput(label="Meta em reais", placeholder="5000,00", max_length=20)
     dm_message = discord.ui.TextInput(
         label="Mensagem ao atingir a meta",
         required=False,
@@ -296,7 +262,7 @@ class RankTierModal(discord.ui.Modal, title="Faixa de cliente"):
             )
             return
         await interaction.response.send_message(
-            f"Faixa **{tier.name}** configurada a partir de **{tier.min_spend:.2f} créditos**.",
+            f"Faixa **{tier.name}** configurada a partir de **R$ {tier.min_spend:.2f}**.",
             ephemeral=True,
         )
         await _sync_feedback_permissions_after_response(interaction)
