@@ -1,15 +1,18 @@
 import io
-from datetime import UTC, datetime
+import re
+import unicodedata
 from uuid import UUID
 
 import discord
 from sqlalchemy import select
 
 from app.bot.checks import can_deliver, can_support
+from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.workflows.transcripts import render_channel_transcript
 from app.db.models import GuildConfig, Order, OrderItem, User
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
+from app.services.calculator import format_brl
 from app.services.feedback import schedule_feedback_reminder, submit_feedback
 from app.services.feedback_cards import render_feedback_card
 from app.services.orders import mark_order_delivered
@@ -38,6 +41,57 @@ async def _load_order(order_id: UUID):
             select(GuildConfig).where(GuildConfig.guild_id == order.guild_id)
         )
         return order, user, items, config
+
+
+def _order_name(items: list[OrderItem]) -> str:
+    if not items:
+        return "Pedido"
+    if len(items) == 1:
+        return items[0].name_snapshot
+    return f"{items[0].name_snapshot} + {len(items) - 1} item(ns)"
+
+
+def _channel_slug(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    cleaned = re.sub(r"[^a-z0-9]+", "-", ascii_text).strip("-")
+    return (cleaned or "pedido")[:70]
+
+
+def _item_lines(items: list[OrderItem]) -> list[str]:
+    if not items:
+        return ["Pedido sem itens."]
+    return [f"- **{item.name_snapshot}** × `{item.quantity}`" for item in items]
+
+
+class TicketStaffLayout(discord.ui.LayoutView):
+    def __init__(
+        self,
+        order_id: UUID,
+        *,
+        title: str,
+        lines: list[str],
+        image_url: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        card = CardLayout(
+            title=title,
+            lines=lines,
+            footer="NEXTBUY • Atendimento",
+            image_url=image_url,
+            timeout=timeout,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+
+        legacy = TicketStaffView(order_id)
+        buttons = list(legacy.children)
+        for item in buttons:
+            legacy.remove_item(item)
+        if buttons:
+            add_action_row(self.container, *buttons)
 
 
 async def open_order_ticket(
@@ -104,12 +158,13 @@ async def open_order_ticket(
         if isinstance(candidate, discord.CategoryChannel):
             category = candidate
 
+    product_name = _order_name(items)
     channel = await guild.create_text_channel(
-        name=f"pedido-{str(order.id)[:8]}",
+        name=f"pedido-{_channel_slug(product_name)}",
         category=category,
         overwrites=overwrites,
         topic=f"NEXTBUY order={order.id} customer={user.discord_user_id}",
-        reason="NEXTBUY: pedido pago",
+        reason="NEXTBUY: pedido confirmado",
     )
     async with SessionLocal() as session, session.begin():
         db_order = await session.get(Order, order.id)
@@ -128,18 +183,21 @@ async def open_order_ticket(
                 },
             )
 
-    lines = "\n".join(f"• {item.name_snapshot} × {item.quantity}" for item in items)
-    embed = discord.Embed(
-        title=f"Pedido {str(order.id)[:8]}",
-        description=lines or "Pedido sem itens.",
-    )
-    embed.add_field(name="Cliente", value=member.mention)
-    embed.add_field(name="Total", value=f"{order.total_credits:.2f} créditos")
-    embed.add_field(name="Status", value="Pago")
+    lines = [
+        f"**Cliente:** {member.mention}",
+        *_item_lines(items),
+        f"**Total:** `{format_brl(order.total_credits)}`",
+        "**Status:** `Confirmado`",
+    ]
+    image_url = items[0].image_url_snapshot if items else None
     await channel.send(
-        content=member.mention,
-        embed=embed,
-        view=TicketStaffView(order.id),
+        view=TicketStaffLayout(
+            order.id,
+            title=product_name,
+            lines=lines,
+            image_url=image_url,
+            timeout=None,
+        ),
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
     return channel
@@ -157,16 +215,20 @@ async def publish_delivery(guild: discord.Guild, *, order_id: UUID) -> None:
         return
 
     member = guild.get_member(user.discord_user_id)
-    embed = discord.Embed(
+    product_name = _order_name(items)
+    view = CardLayout(
         title="Entrega realizada",
-        description="\n".join(f"• {item.name_snapshot} × {item.quantity}" for item in items),
-        timestamp=order.delivered_at or datetime.now(UTC),
+        description=f"**{product_name}**",
+        lines=[
+            f"**Cliente:** {member.mention if member else f'<@{user.discord_user_id}>'}",
+            *_item_lines(items),
+            "**Status:** `Entregue`",
+        ],
+        footer="NEXTBUY • Entrega",
+        image_url=items[0].image_url_snapshot if items else None,
+        timeout=None,
     )
-    embed.add_field(name="Cliente", value=member.mention if member else f"<@{user.discord_user_id}>")
-    embed.add_field(name="Pedido", value=f"`{str(order.id)[:8]}`")
-    if items and items[0].image_url_snapshot:
-        embed.set_image(url=items[0].image_url_snapshot)
-    message = await channel.send(embed=embed)
+    message = await channel.send(view=view)
     async with SessionLocal() as session, session.begin():
         db_order = await session.get(Order, order.id)
         if db_order is not None:
@@ -189,12 +251,13 @@ class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             user = await session.scalar(
                 select(User).where(User.discord_user_id == interaction.user.id)
             )
             if user is None:
-                await interaction.response.send_message("Compra não encontrada.", ephemeral=True)
+                await interaction.edit_original_response(content="Compra não encontrada.")
                 return
             feedback = await submit_feedback(
                 session,
@@ -225,17 +288,23 @@ class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
                 )
                 filename = f"feedback-{str(self.order_id)[:8]}.png"
                 file = discord.File(io.BytesIO(card_bytes), filename=filename)
-                embed = discord.Embed(
-                    title="Feedback de compra verificada",
-                    description=f"{interaction.user.mention} • {'⭐' * feedback.stars}",
+                published = await channel.send(
+                    view=CardLayout(
+                        title="Feedback de compra verificada",
+                        description=interaction.user.mention,
+                        lines=[f"**Avaliação:** `{'★' * feedback.stars}{'☆' * (5 - feedback.stars)}`"],
+                        image_url=f"attachment://{filename}",
+                        footer="NEXTBUY • Feedback",
+                        timeout=None,
+                    ),
+                    file=file,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
-                embed.set_image(url=f"attachment://{filename}")
-                published = await channel.send(embed=embed, file=file)
                 async with SessionLocal() as session, session.begin():
                     db_feedback = await session.get(type(feedback), feedback.id)
                     if db_feedback is not None:
                         db_feedback.published_message_id = published.id
-        await interaction.response.send_message("Feedback salvo. Obrigado pela avaliação.", ephemeral=True)
+        await interaction.edit_original_response(content="Feedback salvo. Obrigado pela avaliação.")
 
 
 class StarSelect(discord.ui.Select):
@@ -253,14 +322,28 @@ class StarSelect(discord.ui.Select):
         )
 
 
-class FeedbackPromptView(discord.ui.View):
+class FeedbackPromptView(discord.ui.LayoutView):
     def __init__(self, order_id: UUID) -> None:
         super().__init__(timeout=300)
         self.order_id = order_id
-        self.add_item(StarSelect(order_id))
+        card = CardLayout(
+            title="Avaliar compra",
+            description="Como foi sua experiência com a NEXTBUY?",
+            timeout=300,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+        add_select_row(self.container, StarSelect(order_id))
 
-    @discord.ui.button(label="Avaliar mais tarde", style=discord.ButtonStyle.secondary)
-    async def later(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        later = discord.ui.Button(
+            label="Avaliar mais tarde",
+            style=discord.ButtonStyle.secondary,
+        )
+        later.callback = self._later
+        add_action_row(self.container, later)
+
+    async def _later(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
             "Beleza. Se continuar pendente, eu te lembro no canal de feedbacks.",
             ephemeral=True,
@@ -287,12 +370,13 @@ class TicketStaffView(discord.ui.View):
         if not await can_support(interaction) and not await can_deliver(interaction):
             await interaction.response.send_message("Sem permissão.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             order = await session.scalar(
                 select(Order).where(Order.id == self.order_id).with_for_update()
             )
             if order is None:
-                await interaction.response.send_message("Pedido não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Pedido não encontrado.")
                 return
             if order.status == "paid":
                 order.status = "processing"
@@ -305,7 +389,7 @@ class TicketStaffView(discord.ui.View):
                     target_id=str(order.id),
                     details={"channel_id": interaction.channel_id},
                 )
-        await interaction.response.send_message("Pedido marcado como em atendimento.", ephemeral=True)
+        await interaction.edit_original_response(content="Pedido marcado como em atendimento.")
 
     @discord.ui.button(
         label="Marcar entregue",
@@ -316,6 +400,7 @@ class TicketStaffView(discord.ui.View):
         if interaction.guild is None or not await can_deliver(interaction):
             await interaction.response.send_message("Sem permissão de entrega.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             before = await session.scalar(
                 select(Order.status).where(Order.id == self.order_id).with_for_update()
@@ -341,10 +426,10 @@ class TicketStaffView(discord.ui.View):
                     },
                 )
         await publish_delivery(interaction.guild, order_id=self.order_id)
-        await interaction.response.send_message("Entrega registrada.", ephemeral=True)
+        await interaction.edit_original_response(content="Entrega registrada.")
         if isinstance(interaction.channel, discord.TextChannel) and user is not None:
             await interaction.channel.send(
-                content=f"<@{user.discord_user_id}> sua entrega foi concluída. Quer avaliar agora?",
+                content=f"<@{user.discord_user_id}>",
                 view=FeedbackPromptView(self.order_id),
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
