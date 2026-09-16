@@ -6,6 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.money import money
 from app.db.models import Product, RobuxRate, TermsDocument
 
+DEFAULT_ROBUX_RATE_CODE = "padrao"
+DEFAULT_ROBUX_RATE_LABEL = "Robux padrão"
+DEFAULT_ROBUX_PRICE_PER_ROBUX = Decimal("0.029000")
+DEFAULT_ROBUX_DELIVERY_LABEL = "Cotação padrão da loja"
+
 
 def _available_product_clause():
     return or_(Product.stock_quantity.is_(None), Product.stock_quantity > 0)
@@ -128,6 +133,27 @@ async def set_product_active(
     product.active = active
     await session.flush()
     return product
+
+
+async def ensure_default_robux_rate(session: AsyncSession, *, guild_id: int) -> RobuxRate | None:
+    existing = await session.scalar(
+        select(RobuxRate.id).where(RobuxRate.guild_id == guild_id).limit(1)
+    )
+    if existing is not None:
+        return None
+
+    rate = RobuxRate(
+        guild_id=guild_id,
+        code=DEFAULT_ROBUX_RATE_CODE,
+        label=DEFAULT_ROBUX_RATE_LABEL,
+        price_per_robux=DEFAULT_ROBUX_PRICE_PER_ROBUX,
+        delivery_label=DEFAULT_ROBUX_DELIVERY_LABEL,
+        active=True,
+        sort_order=0,
+    )
+    session.add(rate)
+    await session.flush()
+    return rate
 
 
 async def upsert_robux_rate(
