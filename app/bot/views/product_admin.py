@@ -4,6 +4,7 @@ import discord
 
 from app.db.models import Product
 from app.db.session import SessionLocal
+from app.services.calculator import format_brl
 from app.services.catalog import (
     list_products,
     set_product_active,
@@ -14,15 +15,12 @@ from app.services.catalog import (
 
 def build_product_admin_embed(product: Product) -> discord.Embed:
     status = "Ativo" if product.active else "Desativado"
-    price = (
-        f"{product.price_credits:.2f} créditos"
-        if product.price_credits is not None
-        else "Sob cotação"
-    )
+    price = format_brl(product.price_credits) if product.price_credits is not None else "Sem preço"
     stock = "Ilimitado" if product.stock_quantity is None else str(product.stock_quantity)
     embed = discord.Embed(
         title=f"Produto • {product.name}",
         description=product.description or "Sem descrição.",
+        color=discord.Color.from_rgb(43, 45, 49),
     )
     embed.add_field(name="ID", value=str(product.id))
     embed.add_field(name="Tipo", value=product.product_type)
@@ -31,7 +29,7 @@ def build_product_admin_embed(product: Product) -> discord.Embed:
     embed.add_field(name="Estoque", value=stock)
     embed.add_field(name="Entrega", value=product.delivery_mode)
     embed.add_field(name="Status", value=status)
-    embed.add_field(name="Emoji", value=product.emoji or "—")
+    embed.add_field(name="Emoji da loja", value=product.emoji or "—")
     if product.image_url:
         embed.set_image(url=product.image_url)
     return embed
@@ -42,7 +40,7 @@ class ProductPresentationModal(discord.ui.Modal):
         super().__init__(title=f"Editar {product.name[:35]}")
         self.product_id = product.id
         self.price = discord.ui.TextInput(
-            label="Preço em créditos (vazio = cotação)",
+            label="Preço em reais",
             required=False,
             max_length=20,
             default=str(product.price_credits or ""),
@@ -61,7 +59,7 @@ class ProductPresentationModal(discord.ui.Modal):
             default=(product.image_url or "")[:1000],
         )
         self.emoji = discord.ui.TextInput(
-            label="Emoji",
+            label="Emoji da loja",
             required=False,
             max_length=128,
             default=product.emoji or "",
@@ -108,7 +106,7 @@ class ProductPresentationModal(discord.ui.Modal):
                 return
 
         await interaction.response.send_message(
-            "Produto atualizado. Reabra **Gerenciar produtos** para conferir o resultado.",
+            "Produto atualizado. Reabra **Preços e estoques** para conferir.",
             ephemeral=True,
         )
 
@@ -159,7 +157,7 @@ class ProductActionsView(discord.ui.View):
         super().__init__(timeout=180)
         self.product_id = product_id
 
-    @discord.ui.button(label="Editar visual/preço", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Editar visual/preço", style=discord.ButtonStyle.secondary)
     async def edit(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         async with SessionLocal() as session:
             product = await session.get(Product, self.product_id)
@@ -168,7 +166,7 @@ class ProductActionsView(discord.ui.View):
             return
         await interaction.response.send_modal(ProductPresentationModal(product))
 
-    @discord.ui.button(label="Estoque", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Estoque", style=discord.ButtonStyle.secondary)
     async def stock(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         async with SessionLocal() as session:
             product = await session.get(Product, self.product_id)
@@ -235,7 +233,7 @@ async def send_product_management(interaction: discord.Interaction) -> None:
         products = await list_products(session, guild_id=interaction.guild.id)
     if not products:
         await interaction.response.send_message(
-            "Ainda não existem produtos. Use **Novo produto** primeiro.",
+            "Ainda não existem produtos. Use **Criar produto** primeiro.",
             ephemeral=True,
         )
         return
