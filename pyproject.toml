@@ -13,6 +13,7 @@ dependencies = [
   "pydantic-settings>=2.10,<3",
   "httpx>=0.28,<1",
   "pillow>=11,<13",
+  "qrcode>=8,<9",
   "stripe>=12,<15",
 ]
 

@@ -11,12 +11,15 @@ class Settings(BaseSettings):
     discord_guild_id: int | None = None
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nextbuy"
 
-    # Gateway principal.
+    # Pagamento atual: PIX estático por pedido, confirmado manualmente pela equipe.
+    pix_key: SecretStr = SecretStr("")
+    pix_receiver_name: str = ""
+    pix_receiver_city: str = ""
+
+    # Integrações antigas mantidas somente para compatibilidade de histórico/webhooks legados.
     stripe_secret_key: SecretStr = SecretStr("")
     stripe_webhook_secret: SecretStr = SecretStr("")
     stripe_credits_product_id: str | None = None
-
-    # Mantidos somente para processar recargas legadas já criadas antes da migração.
     mercado_pago_access_token: SecretStr = SecretStr("")
     mercado_pago_webhook_secret: SecretStr = SecretStr("")
 

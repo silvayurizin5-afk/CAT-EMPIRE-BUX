@@ -3,8 +3,8 @@ import logging
 import discord
 from discord.ext import commands
 
+from app.bot.views.manual_pix import restore_manual_pix_views
 from app.bot.views.profile import LeaderboardView
-from app.bot.views.store import StoreHomeView
 from app.bot.views.store_panel import restore_store_panel_views
 from app.bot.workflows.feedback_permissions import (
     FeedbackPermissionSyncError,
@@ -48,14 +48,12 @@ class NextBuyBot(commands.Bot):
         await self.load_extension("app.bot.cogs.staff")
         await self.load_extension("app.bot.cogs.feedback")
         await self.load_extension("app.bot.cogs.automation")
-        await self.load_extension("app.bot.cogs.payments")
-        await self.load_extension("app.bot.cogs.stripe_payments")
         await self.load_extension("app.bot.cogs.ticket_automation")
         await self.load_extension("app.bot.cogs.audit_logs")
         await self.load_extension("app.bot.cogs.leaderboard_refresh")
-        self.add_view(StoreHomeView())
         self.add_view(LeaderboardView())
         await self._restore_ticket_views()
+        await restore_manual_pix_views(self)
         await restore_store_panel_views(self)
         if settings.discord_guild_id:
             guild = discord.Object(id=settings.discord_guild_id)

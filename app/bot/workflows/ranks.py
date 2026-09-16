@@ -3,6 +3,7 @@ import logging
 import discord
 
 from app.db.session import SessionLocal
+from app.services.calculator import format_brl
 from app.services.configs import get_or_create_guild_config
 from app.services.profiles import get_customer_profile
 from app.services.ranks import choose_rank_tier, list_rank_tiers
@@ -46,7 +47,7 @@ async def sync_customer_roles(member: discord.Member) -> None:
         if newly_reached and target_tier is not None:
             text = target_tier.dm_message.strip() or (
                 f"Você atingiu a faixa **{target_tier.name}** na NEXTBUY! "
-                f"Total gasto: **{profile.total_spent:.2f} créditos**."
+                f"Total gasto: **{format_brl(profile.total_spent)}**."
             )
             try:
                 await member.send(text)

@@ -6,19 +6,18 @@ import discord
 from sqlalchemy import select
 
 from app.bot.views import store
+from app.bot.views.manual_pix import open_manual_pix_ticket
 from app.bot.views.profile import build_profile_embed
 from app.bot.views.terms_gate import require_current_terms
-from app.bot.workflows.leaderboard import refresh_leaderboard
-from app.bot.workflows.ranks import sync_customer_roles
-from app.bot.workflows.tickets import open_order_ticket
 from app.core.money import money
-from app.db.models import Order, Product
+from app.db.models import Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
-from app.integrations.stripe_gateway import StripeGateway, StripeGatewayError
 from app.services.calculator import format_brl
 from app.services.catalog import list_active_terms
+from app.services.manual_payments import cancel_manual_pix_order
 from app.services.orders import OutOfStockError
+from app.services.pix import PixConfigError, validate_pix_config
 from app.services.profiles import get_customer_profile
 from app.services.store_panel import (
     create_store_product_order,
@@ -27,26 +26,9 @@ from app.services.store_panel import (
     get_or_create_store_panel,
     list_store_products,
 )
-from app.services.stripe_orders import create_order_checkout
 from app.services.users import get_or_create_user
 
 PIX_EMOJI = "<:PIX:1549632822388592663>"
-
-
-async def _finish_paid_order(interaction: discord.Interaction, order_id: UUID) -> str:
-    if interaction.guild is None:
-        return "ticket pendente"
-    member = interaction.guild.get_member(interaction.user.id)
-    if member is None:
-        try:
-            member = await interaction.guild.fetch_member(interaction.user.id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            member = None
-    if member is not None:
-        await sync_customer_roles(member)
-    await refresh_leaderboard(interaction.guild)
-    ticket = await open_order_ticket(interaction, order_id=order_id)
-    return ticket.mention if ticket is not None else "ticket pendente de configuração"
 
 
 def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> discord.Embed:
@@ -58,7 +40,7 @@ def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> dis
     embed.add_field(name="Produtos disponíveis", value=str(product_count), inline=True)
     embed.add_field(
         name="Pagamento",
-        value=f"{PIX_EMOJI} Reais (BRL) • checkout seguro",
+        value=f"{PIX_EMOJI} PIX em reais • confirmação manual",
         inline=True,
     )
     if config.image_url:
@@ -157,58 +139,6 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
         )
 
 
-class OrderPaymentView(discord.ui.View):
-    def __init__(self, *, order_id: UUID, checkout_url: str, owner_id: int) -> None:
-        super().__init__(timeout=1800)
-        self.order_id = order_id
-        self.owner_id = owner_id
-        self.add_item(
-            discord.ui.Button(
-                label="Pagar agora",
-                url=checkout_url,
-                row=0,
-            )
-        )
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_id:
-            return True
-        await interaction.response.send_message(
-            "Esse pagamento pertence a outro cliente.", ephemeral=True
-        )
-        return False
-
-    @discord.ui.button(label="Verificar pagamento", style=discord.ButtonStyle.success, row=1)
-    async def verify(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        async with SessionLocal() as session:
-            order = await session.get(Order, self.order_id)
-        if order is None:
-            await interaction.response.send_message("Pedido não encontrado.", ephemeral=True)
-            return
-        if order.status in {"paid", "processing", "delivered"}:
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            ticket_text = await _finish_paid_order(interaction, order.id)
-            await interaction.edit_original_response(
-                content=(
-                    f"Pagamento confirmado. Pedido `{str(order.id)[:8]}`. "
-                    f"Atendimento: {ticket_text}."
-                ),
-                embed=None,
-                view=None,
-            )
-            return
-        if order.status == "cancelled":
-            await interaction.response.send_message(
-                "Esse checkout expirou ou falhou. Selecione o produto novamente.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message(
-            "A Stripe ainda não confirmou o pagamento. Aguarde alguns segundos e tente novamente.",
-            ephemeral=True,
-        )
-
-
 class ConfiguredProductCheckoutView(discord.ui.View):
     def __init__(self, *, product_id: int, owner_id: int, coupon_id: int | None = None) -> None:
         super().__init__(timeout=300)
@@ -232,6 +162,19 @@ class ConfiguredProductCheckoutView(discord.ui.View):
         if not await require_current_terms(interaction, resume_view=self):
             return
 
+        try:
+            validate_pix_config()
+        except PixConfigError:
+            await interaction.edit_original_response(
+                content=(
+                    "O pagamento PIX ainda não foi configurado pela equipe. "
+                    "Defina PIX_KEY, PIX_RECEIVER_NAME e PIX_RECEIVER_CITY no ambiente do bot."
+                ),
+                embed=None,
+                view=None,
+            )
+            return
+
         async with self._lock:
             if self._order_id is not None:
                 await interaction.edit_original_response(
@@ -253,43 +196,66 @@ class ConfiguredProductCheckoutView(discord.ui.View):
                         product=product,
                         coupon_id=self.coupon_id,
                     )
-                    payment = await create_order_checkout(
-                        session,
-                        order=order,
-                        product_name=product.name,
-                        stripe_gateway=StripeGateway(),
-                    )
                 self._order_id = order.id
             except OutOfStockError:
                 await interaction.edit_original_response(
                     content="Esse produto ficou sem estoque.", embed=None, view=None
                 )
                 return
-            except (StripeGatewayError, ValueError) as exc:
+            except ValueError as exc:
                 await interaction.edit_original_response(
-                    content=str(exc) or "Não consegui abrir o pagamento agora.",
+                    content=str(exc) or "Não consegui criar o pedido agora.",
                     embed=None,
                     view=None,
                 )
                 return
 
-        if not payment.checkout_url:
+        try:
+            ticket = await open_manual_pix_ticket(interaction, order_id=order.id)
+        except (ValueError, discord.Forbidden, discord.HTTPException):
+            async with SessionLocal() as session, session.begin():
+                await cancel_manual_pix_order(
+                    session,
+                    order_id=order.id,
+                    actor_discord_id=interaction.user.id,
+                    reason="falha ao abrir ticket de pagamento",
+                )
+            self._order_id = None
             await interaction.edit_original_response(
-                content="A Stripe não retornou um checkout válido.", embed=None, view=None
+                content=(
+                    "Não consegui abrir o canal privado de pagamento. "
+                    "O pedido foi cancelado e o estoque foi devolvido."
+                ),
+                embed=None,
+                view=None,
             )
             return
+
+        if ticket is None:
+            async with SessionLocal() as session, session.begin():
+                await cancel_manual_pix_order(
+                    session,
+                    order_id=order.id,
+                    actor_discord_id=interaction.user.id,
+                    reason="ticket de pagamento indisponível",
+                )
+            self._order_id = None
+            await interaction.edit_original_response(
+                content="Não consegui criar o canal de pagamento. O pedido foi cancelado.",
+                embed=None,
+                view=None,
+            )
+            return
+
         coupon_text = f" • cupom `{coupon.code}`" if coupon is not None else ""
         await interaction.edit_original_response(
             content=(
                 f"Pedido `{str(order.id)[:8]}` • **{format_brl(order.total_credits)}**"
-                f"{coupon_text}. Pague pela Stripe e depois clique em **Verificar pagamento**."
+                f"{coupon_text}. O QR Code e o PIX Copia e Cola estão em {ticket.mention}. "
+                "Depois de pagar, aguarde a confirmação manual da equipe."
             ),
             embed=None,
-            view=OrderPaymentView(
-                order_id=order.id,
-                checkout_url=payment.checkout_url,
-                owner_id=self.owner_id,
-            ),
+            view=None,
         )
 
     @discord.ui.button(label="Adicionar cupom", style=discord.ButtonStyle.secondary, row=0)
