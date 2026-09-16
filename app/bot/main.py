@@ -3,7 +3,7 @@ import logging
 import discord
 from discord.ext import commands
 
-from app.bot.views.manual_pix import restore_manual_pix_views
+from app.bot.views.manual_pix import TicketStaffContainerLayout, restore_manual_pix_views
 from app.bot.views.profile import LeaderboardView
 from app.bot.views.store_panel import restore_store_panel_views
 from app.bot.workflows.feedback_permissions import (
@@ -28,7 +28,6 @@ class NextBuyBot(commands.Bot):
     async def _restore_ticket_views(self) -> None:
         from sqlalchemy import select
 
-        from app.bot.workflows.tickets import TicketStaffView
         from app.db.models import Order
 
         async with SessionLocal() as session:
@@ -41,7 +40,7 @@ class NextBuyBot(commands.Bot):
                 )
             ).all()
         for order_id in order_ids:
-            self.add_view(TicketStaffView(order_id))
+            self.add_view(TicketStaffContainerLayout(order_id))
 
     async def setup_hook(self) -> None:
         await self.load_extension("app.bot.cogs.admin")
