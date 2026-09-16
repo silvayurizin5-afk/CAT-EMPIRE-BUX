@@ -1,4 +1,6 @@
 import io
+import re
+import unicodedata
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,9 +12,12 @@ from app.bot.workflows.transcripts import render_channel_transcript
 from app.db.models import GuildConfig, Order, OrderItem, User
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
+from app.services.calculator import format_brl
 from app.services.feedback import schedule_feedback_reminder, submit_feedback
 from app.services.feedback_cards import render_feedback_card
 from app.services.orders import mark_order_delivered
+
+DEFAULT_ACCENT = 0x2B2D31
 
 
 async def _load_order(order_id: UUID):
@@ -38,6 +43,44 @@ async def _load_order(order_id: UUID):
             select(GuildConfig).where(GuildConfig.guild_id == order.guild_id)
         )
         return order, user, items, config
+
+
+def _product_title(items: list[OrderItem]) -> str:
+    if not items:
+        return "Pedido"
+    first = items[0].name_snapshot
+    if len(items) == 1:
+        return first
+    return f"{first} +{len(items) - 1}"
+
+
+def _channel_slug(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
+    return (slug or "pedido")[:70]
+
+
+def _items_text(items: list[OrderItem]) -> str:
+    if not items:
+        return "- Pedido sem itens."
+    return "\n".join(f"- **{item.name_snapshot}** × `{item.quantity}`" for item in items)
+
+
+def _ticket_text(
+    *,
+    member_mention: str,
+    order: Order,
+    items: list[OrderItem],
+    status: str,
+) -> str:
+    return (
+        f"## {_product_title(items)}\n"
+        f"{_items_text(items)}\n\n"
+        f"**Cliente:** {member_mention}\n"
+        f"**Total:** **`{format_brl(order.total_credits)}`**\n"
+        f"**Status:** **{status}**"
+    )
 
 
 async def open_order_ticket(
@@ -105,7 +148,7 @@ async def open_order_ticket(
             category = candidate
 
     channel = await guild.create_text_channel(
-        name=f"pedido-{str(order.id)[:8]}",
+        name=f"pedido-{_channel_slug(_product_title(items))}"[:100],
         category=category,
         overwrites=overwrites,
         topic=f"NEXTBUY order={order.id} customer={user.discord_user_id}",
@@ -128,18 +171,16 @@ async def open_order_ticket(
                 },
             )
 
-    lines = "\n".join(f"• {item.name_snapshot} × {item.quantity}" for item in items)
-    embed = discord.Embed(
-        title=f"Pedido {str(order.id)[:8]}",
-        description=lines or "Pedido sem itens.",
-    )
-    embed.add_field(name="Cliente", value=member.mention)
-    embed.add_field(name="Total", value=f"{order.total_credits:.2f} créditos")
-    embed.add_field(name="Status", value="Pago")
     await channel.send(
-        content=member.mention,
-        embed=embed,
-        view=TicketStaffView(order.id),
+        view=TicketStaffView(
+            order.id,
+            body=_ticket_text(
+                member_mention=member.mention,
+                order=order,
+                items=items,
+                status="Confirmado",
+            ),
+        ),
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
     return channel
@@ -157,16 +198,24 @@ async def publish_delivery(guild: discord.Guild, *, order_id: UUID) -> None:
         return
 
     member = guild.get_member(user.discord_user_id)
-    embed = discord.Embed(
-        title="Entrega realizada",
-        description="\n".join(f"• {item.name_snapshot} × {item.quantity}" for item in items),
-        timestamp=order.delivered_at or datetime.now(UTC),
+    mention = member.mention if member else f"<@{user.discord_user_id}>"
+    body = (
+        f"## Entrega realizada\n"
+        f"{_items_text(items)}\n\n"
+        f"**Cliente:** {mention}\n"
+        f"-# {discord.utils.format_dt(order.delivered_at or datetime.now(UTC), style='R')}"
     )
-    embed.add_field(name="Cliente", value=member.mention if member else f"<@{user.discord_user_id}>")
-    embed.add_field(name="Pedido", value=f"`{str(order.id)[:8]}`")
+    children: list[discord.ui.Item] = [discord.ui.TextDisplay(body)]
     if items and items[0].image_url_snapshot:
-        embed.set_image(url=items[0].image_url_snapshot)
-    message = await channel.send(embed=embed)
+        gallery = discord.ui.MediaGallery()
+        gallery.add_item(media=items[0].image_url_snapshot, description=_product_title(items)[:256])
+        children.append(gallery)
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*children, accent_color=DEFAULT_ACCENT))
+    message = await channel.send(
+        view=view,
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
     async with SessionLocal() as session, session.begin():
         db_order = await session.get(Order, order.id)
         if db_order is not None:
@@ -225,12 +274,24 @@ class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
                 )
                 filename = f"feedback-{str(self.order_id)[:8]}.png"
                 file = discord.File(io.BytesIO(card_bytes), filename=filename)
-                embed = discord.Embed(
-                    title="Feedback de compra verificada",
-                    description=f"{interaction.user.mention} • {'⭐' * feedback.stars}",
+                layout = discord.ui.LayoutView(timeout=None)
+                layout.add_item(
+                    discord.ui.Container(
+                        discord.ui.TextDisplay(
+                            f"## Feedback de compra verificada\n"
+                            f"{interaction.user.mention} • {'⭐' * feedback.stars}"
+                        ),
+                        discord.ui.MediaGallery(
+                            discord.MediaGalleryItem(f"attachment://{filename}")
+                        ),
+                        accent_color=DEFAULT_ACCENT,
+                    )
                 )
-                embed.set_image(url=f"attachment://{filename}")
-                published = await channel.send(embed=embed, file=file)
+                published = await channel.send(
+                    file=file,
+                    view=layout,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+                )
                 async with SessionLocal() as session, session.begin():
                     db_feedback = await session.get(type(feedback), feedback.id)
                     if db_feedback is not None:
@@ -253,35 +314,65 @@ class StarSelect(discord.ui.Select):
         )
 
 
-class FeedbackPromptView(discord.ui.View):
-    def __init__(self, order_id: UUID) -> None:
+class FeedbackPromptView(discord.ui.LayoutView):
+    def __init__(self, order_id: UUID, *, member_mention: str | None = None) -> None:
         super().__init__(timeout=300)
         self.order_id = order_id
-        self.add_item(StarSelect(order_id))
+        select = StarSelect(order_id)
+        later = discord.ui.Button(label="Avaliar mais tarde", style=discord.ButtonStyle.secondary)
+        later.callback = self._later
+        text = "## Avaliar compra\nSua entrega foi concluída. Quer avaliar agora?"
+        if member_mention:
+            text = f"{member_mention}\n{text}"
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(text),
+                discord.ui.ActionRow(select),
+                discord.ui.ActionRow(later),
+                accent_color=DEFAULT_ACCENT,
+            )
+        )
 
-    @discord.ui.button(label="Avaliar mais tarde", style=discord.ButtonStyle.secondary)
-    async def later(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    async def _later(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
             "Beleza. Se continuar pendente, eu te lembro no canal de feedbacks.",
             ephemeral=True,
         )
 
 
-class TicketStaffView(discord.ui.View):
-    def __init__(self, order_id: UUID) -> None:
+class TicketStaffView(discord.ui.LayoutView):
+    def __init__(self, order_id: UUID, *, body: str | None = None) -> None:
         super().__init__(timeout=None)
         self.order_id = order_id
         suffix = str(order_id)
-        self.processing.custom_id = f"nextbuy:ticket:{suffix}:processing"
-        self.delivered.custom_id = f"nextbuy:ticket:{suffix}:delivered"
-        self.close.custom_id = f"nextbuy:ticket:{suffix}:close"
 
-    @discord.ui.button(
-        label="Em atendimento",
-        style=discord.ButtonStyle.secondary,
-        custom_id="ticket:processing",
-    )
-    async def processing(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        processing = discord.ui.Button(
+            label="Em atendimento",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"nextbuy:ticket:{suffix}:processing",
+        )
+        delivered = discord.ui.Button(
+            label="Marcar entregue",
+            style=discord.ButtonStyle.success,
+            custom_id=f"nextbuy:ticket:{suffix}:delivered",
+        )
+        close = discord.ui.Button(
+            label="Fechar ticket",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"nextbuy:ticket:{suffix}:close",
+        )
+        processing.callback = self._processing
+        delivered.callback = self._delivered
+        close.callback = self._close
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(body or "## Pedido confirmado\nAguardando atendimento da equipe."),
+                discord.ui.ActionRow(processing, delivered, close),
+                accent_color=DEFAULT_ACCENT,
+            )
+        )
+
+    async def _processing(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
         if not await can_support(interaction) and not await can_deliver(interaction):
@@ -307,12 +398,7 @@ class TicketStaffView(discord.ui.View):
                 )
         await interaction.response.send_message("Pedido marcado como em atendimento.", ephemeral=True)
 
-    @discord.ui.button(
-        label="Marcar entregue",
-        style=discord.ButtonStyle.success,
-        custom_id="ticket:delivered",
-    )
-    async def delivered(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    async def _delivered(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not await can_deliver(interaction):
             await interaction.response.send_message("Sem permissão de entrega.", ephemeral=True)
             return
@@ -344,17 +430,14 @@ class TicketStaffView(discord.ui.View):
         await interaction.response.send_message("Entrega registrada.", ephemeral=True)
         if isinstance(interaction.channel, discord.TextChannel) and user is not None:
             await interaction.channel.send(
-                content=f"<@{user.discord_user_id}> sua entrega foi concluída. Quer avaliar agora?",
-                view=FeedbackPromptView(self.order_id),
+                view=FeedbackPromptView(
+                    self.order_id,
+                    member_mention=f"<@{user.discord_user_id}>",
+                ),
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
 
-    @discord.ui.button(
-        label="Fechar ticket",
-        style=discord.ButtonStyle.danger,
-        custom_id="ticket:close",
-    )
-    async def close(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    async def _close(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not await can_support(interaction):
             await interaction.response.send_message("Sem permissão.", ephemeral=True)
             return
@@ -371,10 +454,7 @@ class TicketStaffView(discord.ui.View):
                     io.BytesIO(transcript),
                     filename=f"transcript-{str(self.order_id)[:8]}.html",
                 )
-                await target.send(
-                    content=f"Transcript do pedido `{str(self.order_id)[:8]}`",
-                    file=file,
-                )
+                await target.send(content="Transcript do pedido", file=file)
         if loaded:
             _, user, _, _ = loaded
             member = interaction.guild.get_member(user.discord_user_id)

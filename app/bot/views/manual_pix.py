@@ -1,4 +1,6 @@
 import io
+import re
+import unicodedata
 from uuid import UUID
 
 import discord
@@ -14,6 +16,8 @@ from app.services.audit import write_audit_log
 from app.services.calculator import format_brl
 from app.services.manual_payments import cancel_manual_pix_order, confirm_manual_pix_payment
 from app.services.pix import create_pix_charge
+
+DEFAULT_ACCENT = 0x2B2D31
 
 
 async def _load_order(order_id: UUID):
@@ -41,31 +45,109 @@ async def _load_order(order_id: UUID):
         return order, user, items, config
 
 
-def _set_status(embed: discord.Embed, value: str) -> discord.Embed:
-    updated = embed.copy()
-    for index, field in enumerate(updated.fields):
-        if field.name == "Status":
-            updated.set_field_at(index, name="Status", value=value, inline=field.inline)
-            break
-    return updated
+def _product_title(items: list[OrderItem]) -> str:
+    if not items:
+        return "Pedido"
+    first = items[0].name_snapshot
+    if len(items) == 1:
+        return first
+    return f"{first} +{len(items) - 1}"
 
 
-class ManualPixPaymentView(discord.ui.View):
-    def __init__(self, order_id: UUID) -> None:
+def _channel_slug(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
+    return (slug or "pedido")[:70]
+
+
+def _items_text(items: list[OrderItem]) -> str:
+    if not items:
+        return "- Pedido sem itens."
+    return "\n".join(f"- **{item.name_snapshot}** × `{item.quantity}`" for item in items)
+
+
+def _payment_body(
+    *,
+    member_mention: str,
+    order: Order,
+    items: list[OrderItem],
+    status: str,
+    include_instructions: bool = True,
+) -> str:
+    text = (
+        f"## Pagamento PIX • {_product_title(items)}\n"
+        f"{_items_text(items)}\n\n"
+        f"**Cliente:** {member_mention}\n"
+        f"**Valor:** **`{format_brl(order.total_credits)}`**\n"
+        f"**Status:** **{status}**"
+    )
+    if include_instructions:
+        text += (
+            "\n\nPague pelo QR Code ou pelo **PIX Copia e Cola** abaixo. "
+            "Depois, aguarde a equipe confirmar o recebimento."
+        )
+    return text
+
+
+class PaymentResultView(discord.ui.LayoutView):
+    def __init__(self, body: str) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(body[:4000]),
+                accent_color=DEFAULT_ACCENT,
+            )
+        )
+
+
+class ManualPixPaymentView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        order_id: UUID,
+        *,
+        body: str | None = None,
+        pix_payload: str | None = None,
+        attachment_name: str | None = None,
+    ) -> None:
         super().__init__(timeout=None)
         self.order_id = order_id
         suffix = str(order_id)
-        self.confirm.custom_id = f"nextbuy:pix:{suffix}:confirm"
-        self.cancel.custom_id = f"nextbuy:pix:{suffix}:cancel"
 
-    @discord.ui.button(
-        label="Confirmar pagamento",
-        style=discord.ButtonStyle.success,
-        custom_id="nextbuy:pix:confirm",
-    )
-    async def confirm(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        confirm = discord.ui.Button(
+            label="Confirmar pagamento",
+            style=discord.ButtonStyle.success,
+            custom_id=f"nextbuy:pix:{suffix}:confirm",
+        )
+        cancel = discord.ui.Button(
+            label="Cancelar pedido",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"nextbuy:pix:{suffix}:cancel",
+        )
+        confirm.callback = self._confirm
+        cancel.callback = self._cancel
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                body or "## Pagamento PIX\nAguardando confirmação da equipe."
+            )
+        ]
+        if attachment_name:
+            children.append(discord.ui.File(f"attachment://{attachment_name}"))
+        if pix_payload:
+            children.append(
+                discord.ui.TextDisplay(
+                    f"**PIX Copia e Cola:**\n```text\n{pix_payload}\n```"[:4000]
+                )
+            )
+        children.append(discord.ui.ActionRow(confirm, cancel))
+        self.add_item(discord.ui.Container(*children, accent_color=DEFAULT_ACCENT))
+
+    async def _confirm(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not await can_support(interaction):
-            await interaction.response.send_message("Sem permissão para confirmar pagamentos.", ephemeral=True)
+            await interaction.response.send_message(
+                "Sem permissão para confirmar pagamentos.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -92,32 +174,46 @@ class ManualPixPaymentView(discord.ui.View):
                 await sync_customer_roles(member)
         await refresh_leaderboard(interaction.guild)
 
-        if interaction.message is not None:
-            embed = interaction.message.embeds[0] if interaction.message.embeds else None
-            await interaction.message.edit(
-                embed=_set_status(embed, "Pago • confirmado manualmente") if embed else None,
-                view=TicketStaffView(self.order_id),
+        loaded = await _load_order(self.order_id)
+        if loaded is not None:
+            db_order, db_user, items, _ = loaded
+            member_mention = f"<@{db_user.discord_user_id}>"
+            body = _payment_body(
+                member_mention=member_mention,
+                order=db_order,
+                items=items,
+                status="Confirmado",
+                include_instructions=False,
             )
-        if isinstance(interaction.channel, discord.TextChannel):
-            try:
-                await interaction.channel.edit(name=f"pedido-{str(self.order_id)[:8]}")
-            except discord.HTTPException:
-                pass
-            if user is not None:
+            if interaction.message is not None:
+                await interaction.message.edit(
+                    content=None,
+                    embed=None,
+                    view=TicketStaffView(self.order_id, body=body),
+                )
+            if isinstance(interaction.channel, discord.TextChannel):
+                try:
+                    await interaction.channel.edit(
+                        name=f"pedido-{_channel_slug(_product_title(items))}"[:100]
+                    )
+                except discord.HTTPException:
+                    pass
                 await interaction.channel.send(
-                    f"<@{user.discord_user_id}> pagamento confirmado pela equipe. O pedido está liberado para atendimento.",
-                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+                    view=PaymentResultView(
+                        f"<@{db_user.discord_user_id}>\n"
+                        "## Pagamento confirmado\nO pedido está liberado para atendimento."
+                    ),
+                    allowed_mentions=discord.AllowedMentions(
+                        users=True, roles=False, everyone=False
+                    ),
                 )
         await interaction.followup.send("Pagamento confirmado e registrado.", ephemeral=True)
 
-    @discord.ui.button(
-        label="Cancelar pedido",
-        style=discord.ButtonStyle.danger,
-        custom_id="nextbuy:pix:cancel",
-    )
-    async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    async def _cancel(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not await can_support(interaction):
-            await interaction.response.send_message("Sem permissão para cancelar pagamentos.", ephemeral=True)
+            await interaction.response.send_message(
+                "Sem permissão para cancelar pagamentos.", ephemeral=True
+            )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
@@ -133,15 +229,28 @@ class ManualPixPaymentView(discord.ui.View):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        if interaction.message is not None:
-            embed = interaction.message.embeds[0] if interaction.message.embeds else None
-            await interaction.message.edit(
-                embed=_set_status(embed, "Cancelado") if embed else None,
-                view=None,
+        loaded = await _load_order(self.order_id)
+        if loaded is not None:
+            db_order, db_user, items, _ = loaded
+            body = _payment_body(
+                member_mention=f"<@{db_user.discord_user_id}>",
+                order=db_order,
+                items=items,
+                status="Cancelado",
+                include_instructions=False,
             )
+            if interaction.message is not None:
+                await interaction.message.edit(
+                    content=None,
+                    embed=None,
+                    view=PaymentResultView(body),
+                )
         if isinstance(interaction.channel, discord.TextChannel) and user is not None:
             await interaction.channel.send(
-                f"<@{user.discord_user_id}> este pedido foi cancelado pela equipe.",
+                view=PaymentResultView(
+                    f"<@{user.discord_user_id}>\n## Pedido cancelado\n"
+                    "A equipe cancelou este pedido."
+                ),
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
         await interaction.followup.send("Pedido cancelado e estoque liberado.", ephemeral=True)
@@ -207,7 +316,7 @@ async def open_manual_pix_ticket(
 
     charge = create_pix_charge(amount_brl=order.total_credits, order_id=order.id)
     channel = await guild.create_text_channel(
-        name=f"pagamento-{str(order.id)[:8]}",
+        name=f"pagamento-{_channel_slug(_product_title(items))}"[:100],
         category=category,
         overwrites=overwrites,
         topic=f"NEXTBUY PIX order={order.id} customer={user.discord_user_id}",
@@ -215,36 +324,23 @@ async def open_manual_pix_ticket(
     )
 
     try:
-        lines = "\n".join(f"- **{item.name_snapshot}** × `{item.quantity}`" for item in items)
-        embed = discord.Embed(
-            title=f"Pagamento PIX • Pedido {str(order.id)[:8]}",
-            description=lines or "Pedido sem itens.",
-            color=discord.Color.from_rgb(43, 45, 49),
-        )
-        embed.add_field(name="Cliente", value=member.mention, inline=True)
-        embed.add_field(name="Valor", value=f"`{format_brl(order.total_credits)}`", inline=True)
-        embed.add_field(name="Status", value="Aguardando confirmação manual", inline=False)
-        embed.add_field(
-            name="Como funciona",
-            value=(
-                "Pague pelo QR Code ou pelo PIX Copia e Cola abaixo. "
-                "Depois aguarde a equipe verificar o recebimento e clicar em **Confirmar pagamento**."
-            ),
-            inline=False,
-        )
         filename = f"pix-{str(order.id)[:8]}.png"
-        embed.set_image(url=f"attachment://{filename}")
         file = discord.File(io.BytesIO(charge.qr_png), filename=filename)
-        await channel.send(
-            content=member.mention,
-            embed=embed,
-            file=file,
-            view=ManualPixPaymentView(order.id),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        body = _payment_body(
+            member_mention=member.mention,
+            order=order,
+            items=items,
+            status="Aguardando confirmação",
         )
         await channel.send(
-            f"**PIX Copia e Cola:**\n```{charge.payload}```\nTXID: `{charge.txid}`",
-            allowed_mentions=discord.AllowedMentions.none(),
+            file=file,
+            view=ManualPixPaymentView(
+                order.id,
+                body=body,
+                pix_payload=charge.payload,
+                attachment_name=filename,
+            ),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
         )
 
         async with SessionLocal() as session, session.begin():
