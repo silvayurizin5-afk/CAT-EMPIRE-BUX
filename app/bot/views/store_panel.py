@@ -12,10 +12,13 @@ from app.bot.workflows.leaderboard import refresh_leaderboard
 from app.bot.workflows.ranks import sync_customer_roles
 from app.bot.workflows.tickets import open_order_ticket
 from app.core.money import money
-from app.db.models import Product
+from app.db.models import Order, Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
+from app.integrations.stripe_gateway import StripeGateway, StripeGatewayError
+from app.services.calculator import format_brl
 from app.services.catalog import list_active_terms
+from app.services.orders import OutOfStockError
 from app.services.profiles import get_customer_profile
 from app.services.store_panel import (
     create_store_product_order,
@@ -24,8 +27,10 @@ from app.services.store_panel import (
     get_or_create_store_panel,
     list_store_products,
 )
+from app.services.stripe_orders import create_order_checkout
 from app.services.users import get_or_create_user
-from app.services.wallets import InsufficientCreditsError
+
+PIX_EMOJI = "<:PIX:1549632822388592663>"
 
 
 async def _finish_paid_order(interaction: discord.Interaction, order_id: UUID) -> str:
@@ -50,14 +55,10 @@ def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> dis
         description=config.description or "Selecione um produto abaixo.",
         color=config.color,
     )
-    embed.add_field(
-        name="Produtos disponíveis",
-        value=str(product_count),
-        inline=True,
-    )
+    embed.add_field(name="Produtos disponíveis", value=str(product_count), inline=True)
     embed.add_field(
         name="Pagamento",
-        value="Créditos NEXTBUY • 1 crédito = R$ 1,00",
+        value=f"{PIX_EMOJI} Reais (BRL) • checkout seguro",
         inline=True,
     )
     if config.image_url:
@@ -82,17 +83,14 @@ def build_product_checkout_embed(
     )
     embed.add_field(name="Jogo", value=product.game_name or "—", inline=True)
     if product.price_credits is None:
-        embed.add_field(name="Preço", value="Sob cotação", inline=True)
+        embed.add_field(name="Preço", value="Indisponível", inline=True)
     else:
         original = money(product.price_credits)
         if coupon_code and discount_percent:
             final = discounted_total(original, discount_percent)
             embed.add_field(
-                name="Preço",
-                value=(
-                    f"~~R$ {original:.2f}~~\n"
-                    f"**R$ {final:.2f} • {final:.2f} créditos**"
-                ),
+                name=f"{PIX_EMOJI} Preço",
+                value=f"~~{format_brl(original)}~~\n**`{format_brl(final)}`**",
                 inline=True,
             )
             embed.add_field(
@@ -102,8 +100,8 @@ def build_product_checkout_embed(
             )
         else:
             embed.add_field(
-                name="Preço",
-                value=f"R$ {original:.2f} • {original:.2f} créditos",
+                name=f"{PIX_EMOJI} Preço",
+                value=f"`{format_brl(original)}`",
                 inline=True,
             )
     stock = "Ilimitado" if product.stock_quantity is None else str(product.stock_quantity)
@@ -159,6 +157,58 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
         )
 
 
+class OrderPaymentView(discord.ui.View):
+    def __init__(self, *, order_id: UUID, checkout_url: str, owner_id: int) -> None:
+        super().__init__(timeout=1800)
+        self.order_id = order_id
+        self.owner_id = owner_id
+        self.add_item(
+            discord.ui.Button(
+                label="Pagar agora",
+                url=checkout_url,
+                row=0,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message(
+            "Esse pagamento pertence a outro cliente.", ephemeral=True
+        )
+        return False
+
+    @discord.ui.button(label="Verificar pagamento", style=discord.ButtonStyle.success, row=1)
+    async def verify(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        async with SessionLocal() as session:
+            order = await session.get(Order, self.order_id)
+        if order is None:
+            await interaction.response.send_message("Pedido não encontrado.", ephemeral=True)
+            return
+        if order.status in {"paid", "processing", "delivered"}:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            ticket_text = await _finish_paid_order(interaction, order.id)
+            await interaction.edit_original_response(
+                content=(
+                    f"Pagamento confirmado. Pedido `{str(order.id)[:8]}`. "
+                    f"Atendimento: {ticket_text}."
+                ),
+                embed=None,
+                view=None,
+            )
+            return
+        if order.status == "cancelled":
+            await interaction.response.send_message(
+                "Esse checkout expirou ou falhou. Selecione o produto novamente.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "A Stripe ainda não confirmou o pagamento. Aguarde alguns segundos e tente novamente.",
+            ephemeral=True,
+        )
+
+
 class ConfiguredProductCheckoutView(discord.ui.View):
     def __init__(self, *, product_id: int, owner_id: int, coupon_id: int | None = None) -> None:
         super().__init__(timeout=300)
@@ -203,33 +253,43 @@ class ConfiguredProductCheckoutView(discord.ui.View):
                         product=product,
                         coupon_id=self.coupon_id,
                     )
-                    await store.pay_order_with_credits(session, order_id=order.id)
+                    payment = await create_order_checkout(
+                        session,
+                        order=order,
+                        product_name=product.name,
+                        stripe_gateway=StripeGateway(),
+                    )
                 self._order_id = order.id
-            except InsufficientCreditsError:
-                await interaction.edit_original_response(
-                    content="Você não tem créditos suficientes para essa compra.",
-                    embed=None,
-                    view=None,
-                )
-                return
-            except store.OutOfStockError:
+            except OutOfStockError:
                 await interaction.edit_original_response(
                     content="Esse produto ficou sem estoque.", embed=None, view=None
                 )
                 return
-            except ValueError as exc:
-                await interaction.edit_original_response(content=str(exc), embed=None, view=None)
+            except (StripeGatewayError, ValueError) as exc:
+                await interaction.edit_original_response(
+                    content=str(exc) or "Não consegui abrir o pagamento agora.",
+                    embed=None,
+                    view=None,
+                )
                 return
 
-        ticket_text = await _finish_paid_order(interaction, order.id)
-        coupon_text = f" Cupom `{coupon.code}` aplicado." if coupon is not None else ""
+        if not payment.checkout_url:
+            await interaction.edit_original_response(
+                content="A Stripe não retornou um checkout válido.", embed=None, view=None
+            )
+            return
+        coupon_text = f" • cupom `{coupon.code}`" if coupon is not None else ""
         await interaction.edit_original_response(
             content=(
-                f"Compra confirmada. Pedido `{str(order.id)[:8]}` criado.{coupon_text} "
-                f"Atendimento: {ticket_text}."
+                f"Pedido `{str(order.id)[:8]}` • **{format_brl(order.total_credits)}**"
+                f"{coupon_text}. Pague pela Stripe e depois clique em **Verificar pagamento**."
             ),
             embed=None,
-            view=None,
+            view=OrderPaymentView(
+                order_id=order.id,
+                checkout_url=payment.checkout_url,
+                owner_id=self.owner_id,
+            ),
         )
 
     @discord.ui.button(label="Adicionar cupom", style=discord.ButtonStyle.secondary, row=0)
@@ -243,10 +303,11 @@ class StoreProductSelect(discord.ui.Select):
     def __init__(self, products: list[Product], placeholder: str) -> None:
         options: list[discord.SelectOption] = []
         for product in products[:25]:
-            if product.price_credits is None:
-                price = "Sob cotação"
-            else:
-                price = f"R$ {product.price_credits:.2f}"
+            price = (
+                "Indisponível"
+                if product.price_credits is None
+                else format_brl(money(product.price_credits))
+            )
             stock = "∞" if product.stock_quantity is None else str(product.stock_quantity)
             options.append(
                 discord.SelectOption(
@@ -306,15 +367,6 @@ class StorePanelView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(StoreProductSelect(products, config.product_placeholder))
 
-        topup = discord.ui.Button(
-            label=config.topup_label[:80] or "Adicionar créditos",
-            style=discord.ButtonStyle.success,
-            custom_id="nextbuy:store:configured-topup",
-            row=1,
-        )
-        topup.callback = self._topup
-        self.add_item(topup)
-
         profile = discord.ui.Button(
             label=config.profile_label[:80] or "Meu perfil",
             style=discord.ButtonStyle.secondary,
@@ -332,9 +384,6 @@ class StorePanelView(discord.ui.View):
         )
         terms.callback = self._terms
         self.add_item(terms)
-
-    async def _topup(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(store.TopUpModal())
 
     async def _profile(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
