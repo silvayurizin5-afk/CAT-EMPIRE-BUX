@@ -55,6 +55,7 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
+        await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             config.product_placeholder = str(self.placeholder).strip() or "Selecione um produto"
@@ -70,7 +71,7 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
                 config=config,
             )
             embed = build_store_panel_embed(config, len(products))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="Controles atualizados.",
             embed=embed,
             view=StorePanelAdminViewV2(owner_id=interaction.user.id),
@@ -100,6 +101,7 @@ class GameIconModal(discord.ui.Modal, title="Ícone do jogo no cálculo"):
             await interaction.response.send_message("Informe o nome do jogo.", ephemeral=True)
             return
         emoji = str(self.emoji).strip()
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             icons = dict(config.game_icons or {})
@@ -109,9 +111,8 @@ class GameIconModal(discord.ui.Modal, title="Ícone do jogo no cálculo"):
                 icons.pop(key, None)
             config.game_icons = icons
         action = "configurado" if emoji else "removido"
-        await interaction.response.send_message(
-            f"Ícone de **{game}** {action} para as embeds de cálculo.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content=f"Ícone de **{game}** {action} para as embeds de cálculo."
         )
 
 
@@ -167,11 +168,12 @@ class StorePanelAdminViewV2(StorePanelAdminView):
 async def send_store_panel_admin(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
+    await interaction.response.defer()
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, interaction.guild.id)
         products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
         embed = build_store_panel_embed(config, len(products))
-    await interaction.response.edit_message(
+    await interaction.edit_original_response(
         content="Configure toda a loja por este seletor. A embed abaixo é a prévia atual.",
         embed=embed,
         view=StorePanelAdminViewV2(owner_id=interaction.user.id),
