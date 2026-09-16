@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import ZERO, money
-from app.db.models import Order, OrderItem, User, Wallet
+from app.db.models import Order, OrderItem, User
 
 ACTIVE_SPEND_STATUSES = ("paid", "processing", "delivered")
 
@@ -13,9 +13,9 @@ ACTIVE_SPEND_STATUSES = ("paid", "processing", "delivered")
 @dataclass(slots=True)
 class CustomerProfile:
     total_spent: Decimal
-    balance: Decimal
     completed_orders: int
     leaderboard_position: int | None
+    robux_purchased: int = 0
     recent_products: tuple[str, ...] = ()
     games: tuple[str, ...] = ()
 
@@ -25,6 +25,7 @@ class LeaderboardEntry:
     discord_user_id: int
     total_spent: Decimal
     completed_orders: int
+    robux_purchased: int
 
 
 def _spend_subquery(guild_id: int):
@@ -40,14 +41,23 @@ def _spend_subquery(guild_id: int):
     )
 
 
+def _robux_from_metadata(metadata: dict | None) -> int:
+    if not metadata:
+        return 0
+    try:
+        value = int(metadata.get("robux_amount") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+
 async def get_customer_profile(
     session: AsyncSession, *, guild_id: int, discord_user_id: int
 ) -> CustomerProfile:
     user = await session.scalar(select(User).where(User.discord_user_id == discord_user_id))
     if user is None:
-        return CustomerProfile(ZERO, ZERO, 0, None)
+        return CustomerProfile(ZERO, 0, None)
 
-    balance = await session.scalar(select(Wallet.balance).where(Wallet.user_id == user.id))
     spend = _spend_subquery(guild_id)
     row = (
         await session.execute(
@@ -75,13 +85,15 @@ async def get_customer_profile(
                 Order.status.in_(ACTIVE_SPEND_STATUSES),
             )
             .order_by(Order.created_at.desc(), OrderItem.id.desc())
-            .limit(30)
+            .limit(200)
         )
     ).all()
 
     recent_products: list[str] = []
     games: list[str] = []
+    robux_purchased = 0
     for item_name, metadata in item_rows:
+        robux_purchased += _robux_from_metadata(metadata)
         if item_name not in recent_products:
             recent_products.append(item_name)
         game_name = (metadata or {}).get("game_name")
@@ -90,9 +102,9 @@ async def get_customer_profile(
 
     return CustomerProfile(
         total_spent=total_spent,
-        balance=money(balance or ZERO),
         completed_orders=completed_orders,
         leaderboard_position=leaderboard_position,
+        robux_purchased=robux_purchased,
         recent_products=tuple(recent_products[:5]),
         games=tuple(games[:5]),
     )
@@ -104,18 +116,40 @@ async def list_leaderboard(
     spend = _spend_subquery(guild_id)
     rows = (
         await session.execute(
-            select(User.discord_user_id, spend.c.total_spent, spend.c.completed_orders)
+            select(User.id, User.discord_user_id, spend.c.total_spent, spend.c.completed_orders)
             .join(spend, spend.c.user_id == User.id)
             .where(spend.c.total_spent > 0)
             .order_by(spend.c.total_spent.desc(), spend.c.completed_orders.desc(), User.id.asc())
             .limit(max(1, min(limit, 100)))
         )
     ).all()
+    if not rows:
+        return []
+
+    user_ids = [int(row.id) for row in rows]
+    item_rows = (
+        await session.execute(
+            select(Order.user_id, OrderItem.metadata_json)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .where(
+                Order.guild_id == guild_id,
+                Order.user_id.in_(user_ids),
+                Order.status.in_(ACTIVE_SPEND_STATUSES),
+            )
+        )
+    ).all()
+    robux_by_user: dict[int, int] = {user_id: 0 for user_id in user_ids}
+    for user_id, metadata in item_rows:
+        robux_by_user[int(user_id)] = robux_by_user.get(int(user_id), 0) + _robux_from_metadata(
+            metadata
+        )
+
     return [
         LeaderboardEntry(
             discord_user_id=int(row.discord_user_id),
             total_spent=money(row.total_spent),
             completed_orders=int(row.completed_orders),
+            robux_purchased=robux_by_user.get(int(row.id), 0),
         )
         for row in rows
     ]
