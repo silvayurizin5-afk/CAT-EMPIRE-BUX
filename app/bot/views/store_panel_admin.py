@@ -1,11 +1,10 @@
 from decimal import Decimal, InvalidOperation
 
 import discord
-from sqlalchemy import select
 
+from app.bot.views.admin import ProductModal
 from app.bot.views.product_admin import send_product_management
 from app.bot.views.store_panel import (
-    StorePanelView,
     build_store_panel_embed,
     publish_store_panel,
     refresh_published_store_panel,
@@ -52,14 +51,11 @@ def _http_url_or_none(value: str) -> str | None:
     return cleaned
 
 
-async def _admin_preview(guild_id: int) -> tuple[discord.Embed, StorePanelView]:
+async def _admin_preview(guild_id: int) -> discord.Embed:
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, guild_id)
         products = await list_store_products(session, guild_id=guild_id, config=config)
-        return build_store_panel_embed(config, len(products)), StorePanelView(
-            config=config,
-            products=products,
-        )
+        return build_store_panel_embed(config, len(products))
 
 
 class StoreAppearanceModal(discord.ui.Modal, title="Visual do painel da loja"):
@@ -121,10 +117,9 @@ class StoreAppearanceModal(discord.ui.Modal, title="Visual do painel da loja"):
             config.image_url = image_url
             config.footer_text = str(self.footer_input).strip()
 
-        embed, _ = await _admin_preview(interaction.guild.id)
         await interaction.response.edit_message(
             content="Visual atualizado. A prévia abaixo já usa a nova configuração.",
-            embed=embed,
+            embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
         )
         await refresh_published_store_panel(interaction.guild)
@@ -179,10 +174,9 @@ class StoreControlsModal(discord.ui.Modal, title="Controles do painel"):
             config.terms_label = str(self.terms).strip() or "Termos"
             config.thumbnail_url = thumbnail_url
 
-        embed, _ = await _admin_preview(interaction.guild.id)
         await interaction.response.edit_message(
-            content="Controles atualizados.",
-            embed=embed,
+            content="Seletor e botões atualizados.",
+            embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
         )
         await refresh_published_store_panel(interaction.guild)
@@ -195,7 +189,7 @@ class StoreProductMultiSelect(discord.ui.Select):
             discord.SelectOption(
                 label="Todos os produtos ativos",
                 value="all",
-                description="O painel acompanha automaticamente todos os produtos ativos",
+                description="Acompanha automaticamente todos os produtos ativos",
                 default=not selected,
             )
         ]
@@ -223,10 +217,7 @@ class StoreProductMultiSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
-        if "all" in self.values:
-            product_ids: list[int] = []
-        else:
-            product_ids = [int(value) for value in self.values]
+        product_ids = [] if "all" in self.values else [int(value) for value in self.values]
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             await save_store_product_selection(
@@ -234,14 +225,13 @@ class StoreProductMultiSelect(discord.ui.Select):
                 config=config,
                 product_ids=product_ids,
             )
-        embed, _ = await _admin_preview(interaction.guild.id)
         await interaction.response.edit_message(
             content=(
-                "Painel configurado para mostrar todos os produtos ativos."
+                "O painel agora acompanha todos os produtos ativos."
                 if not product_ids
-                else f"**{len(product_ids)}** produto(s) selecionado(s) para o painel."
+                else f"**{len(product_ids)}** produto(s) selecionado(s) para a loja."
             ),
-            embed=embed,
+            embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
         )
         await refresh_published_store_panel(interaction.guild)
@@ -255,11 +245,7 @@ class StoreProductSelectionView(discord.ui.View):
 
 class CouponCreateModal(discord.ui.Modal, title="Criar / atualizar cupom"):
     code = discord.ui.TextInput(label="Código", placeholder="NEXT10", max_length=40)
-    discount = discord.ui.TextInput(
-        label="Desconto em %",
-        placeholder="10",
-        max_length=8,
-    )
+    discount = discord.ui.TextInput(label="Desconto em %", placeholder="10", max_length=8)
     max_uses = discord.ui.TextInput(
         label="Limite de usos (vazio = ilimitado)",
         required=False,
@@ -298,12 +284,9 @@ class CouponCreateModal(discord.ui.Modal, title="Criar / atualizar cupom"):
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
-        embed, _ = await _admin_preview(interaction.guild.id)
         await interaction.response.edit_message(
-            content=(
-                f"Cupom `{coupon.code}` salvo com **{coupon.discount_percent:.2f}%** de desconto."
-            ),
-            embed=embed,
+            content=f"Cupom `{coupon.code}` salvo com **{coupon.discount_percent:.2f}%** de desconto.",
+            embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=interaction.user.id),
         )
 
@@ -333,7 +316,7 @@ class CouponActionsView(discord.ui.View):
             status = "ativado" if coupon.active else "desativado"
         await interaction.response.edit_message(
             content=f"Cupom `{coupon.code}` {status}.",
-            embed=None,
+            embed=await _admin_preview(interaction.guild.id),
             view=StorePanelAdminView(owner_id=self.owner_id),
         )
 
@@ -434,11 +417,12 @@ class StorePublishChannelView(discord.ui.View):
 STORE_PANEL_ACTIONS = (
     ("appearance", "Visual da embed", "Título, descrição, cor, banner e rodapé"),
     ("controls", "Seletor e botões", "Textos do seletor, créditos, perfil e termos"),
+    ("create_product", "Criar produto", "Cadastre item, Robux ou Game Pass"),
     ("products", "Produtos exibidos", "Escolha os produtos do seletor da loja"),
-    ("manage_products", "Preços e estoques", "Edite preço, estoque, imagem e status dos produtos"),
+    ("manage_products", "Preços e estoques", "Edite preço, estoque, imagem e status"),
     ("create_coupon", "Criar cupom", "Código, porcentagem e limite de usos"),
     ("manage_coupons", "Gerenciar cupons", "Consulte usos e ative/desative cupons"),
-    ("publish", "Publicar / atualizar", "Escolha o canal e envie uma única embed da loja"),
+    ("publish", "Publicar / atualizar", "Escolha o canal e envie uma única embed"),
 )
 
 
@@ -479,11 +463,16 @@ class StorePanelAdminView(discord.ui.View):
         if action in {"appearance", "controls"}:
             async with SessionLocal() as session, session.begin():
                 config = await get_or_create_store_panel(session, interaction.guild.id)
-                if action == "appearance":
-                    modal = StoreAppearanceModal(config=config)
-                else:
-                    modal = StoreControlsModal(config=config)
+                modal = (
+                    StoreAppearanceModal(config=config)
+                    if action == "appearance"
+                    else StoreControlsModal(config=config)
+                )
             await interaction.response.send_modal(modal)
+            return
+
+        if action == "create_product":
+            await interaction.response.send_modal(ProductModal())
             return
 
         if action == "products":
@@ -498,7 +487,7 @@ class StorePanelAdminView(discord.ui.View):
                 )
                 return
             await interaction.response.edit_message(
-                content="Selecione os produtos do painel. **Todos** acompanha os produtos ativos automaticamente.",
+                content="Selecione os produtos do painel. **Todos** acompanha os ativos automaticamente.",
                 embed=None,
                 view=StoreProductSelectionView(products, selected_ids),
             )
@@ -534,18 +523,13 @@ class StorePanelAdminView(discord.ui.View):
                 embed=None,
                 view=StorePublishChannelView(self.owner_id),
             )
-            return
 
 
 async def send_store_panel_admin(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
-    async with SessionLocal() as session, session.begin():
-        config = await get_or_create_store_panel(session, interaction.guild.id)
-        products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
-        embed = build_store_panel_embed(config, len(products))
     await interaction.response.edit_message(
         content="Configure toda a loja por este seletor. A embed abaixo é a prévia atual.",
-        embed=embed,
+        embed=await _admin_preview(interaction.guild.id),
         view=StorePanelAdminView(owner_id=interaction.user.id),
     )
