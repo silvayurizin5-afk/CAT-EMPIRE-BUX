@@ -27,18 +27,15 @@ def _position_label(index: int) -> str:
     return f"#{index}º"
 
 
-async def build_leaderboard_embed(guild: discord.Guild) -> discord.Embed:
+async def build_leaderboard_text(guild: discord.Guild) -> str:
     async with SessionLocal() as session:
         entries = await list_leaderboard(session, guild_id=guild.id, limit=20)
 
-    embed = discord.Embed(
-        title=f"{TROPHY_EMOJI} Leaderboard - NEXTBUY",
-        color=discord.Color.from_rgb(43, 45, 49),
-    )
+    blocks = [f"## {TROPHY_EMOJI} Leaderboard - NEXTBUY"]
     if not entries:
-        return embed
+        blocks.append("Ainda não há compras confirmadas para o ranking.")
+        return "\n\n".join(blocks)
 
-    blocks: list[str] = []
     for index, entry in enumerate(entries, start=1):
         member = guild.get_member(entry.discord_user_id)
         mention = member.mention if member is not None else f"<@{entry.discord_user_id}>"
@@ -51,8 +48,7 @@ async def build_leaderboard_embed(guild: discord.Guild) -> discord.Embed:
                 )
             )
         )
-    embed.description = "\n".join(blocks)
-    return embed
+    return "\n".join(blocks)[:4000]
 
 
 async def refresh_leaderboard(
@@ -72,21 +68,20 @@ async def refresh_leaderboard(
     if target is None:
         return None
 
-    embed = await build_leaderboard_embed(guild)
-    view = LeaderboardView()
+    view = LeaderboardView(body=await build_leaderboard_text(guild))
     message: discord.Message | None = None
 
     if message_id and hasattr(target, "fetch_message"):
         try:
             old_message = await target.fetch_message(message_id)
-            await old_message.edit(embed=embed, view=view)
+            await old_message.edit(content=None, embed=None, view=view)
             message = old_message
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             logger.info("Não foi possível editar o ranking antigo do servidor %s", guild.id)
 
     if message is None:
         try:
-            message = await target.send(embed=embed, view=view)
+            message = await target.send(view=view)
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Não foi possível publicar ranking no servidor %s", guild.id)
             return None
