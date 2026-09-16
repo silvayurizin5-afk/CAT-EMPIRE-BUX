@@ -15,6 +15,26 @@ class Settings(BaseSettings):
     pix_key: SecretStr = SecretStr("")
     pix_receiver_name: str = ""
 
+    # IA: todos os provedores são opcionais. Um provedor só entra no fallback
+    # quando chave e modelo estiverem configurados.
+    ai_provider_order: str = "openai,anthropic,gemini,xai,mistral,groq,openrouter"
+    ai_timeout_seconds: float = 18.0
+
+    openai_api_key: SecretStr = SecretStr("")
+    openai_model: str = ""
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str = ""
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = ""
+    xai_api_key: SecretStr = SecretStr("")
+    xai_model: str = ""
+    mistral_api_key: SecretStr = SecretStr("")
+    mistral_model: str = ""
+    groq_api_key: SecretStr = SecretStr("")
+    groq_model: str = ""
+    openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_model: str = ""
+
     # Integrações antigas mantidas somente para compatibilidade de histórico/webhooks legados.
     stripe_secret_key: SecretStr = SecretStr("")
     stripe_webhook_secret: SecretStr = SecretStr("")
@@ -31,6 +51,14 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @property
+    def ai_providers(self) -> list[str]:
+        return [
+            item.strip().lower()
+            for item in self.ai_provider_order.split(",")
+            if item.strip()
+        ]
 
     @property
     def stripe_webhook_url(self) -> str:
