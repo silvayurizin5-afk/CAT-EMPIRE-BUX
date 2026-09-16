@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 import discord
 
+from app.bot.emoji import select_option_emoji
 from app.db.models import Product
 from app.db.session import SessionLocal
 from app.services.calculator import format_brl
@@ -33,6 +34,14 @@ def build_product_admin_embed(product: Product) -> discord.Embed:
     if product.image_url:
         embed.set_image(url=product.image_url)
     return embed
+
+
+async def _refresh_store_if_needed(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        return
+    from app.bot.views.store_panel import refresh_published_store_panel
+
+    await refresh_published_store_panel(interaction.guild)
 
 
 class ProductPresentationModal(discord.ui.Modal):
@@ -86,10 +95,11 @@ class ProductPresentationModal(discord.ui.Modal):
             await interaction.response.send_message("Preço inválido.", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             product = await session.get(Product, self.product_id)
             if product is None:
-                await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Produto não encontrado.")
                 return
             try:
                 await update_product_presentation(
@@ -102,12 +112,12 @@ class ProductPresentationModal(discord.ui.Modal):
                     delivery_mode=str(self.delivery_mode),
                 )
             except ValueError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
+                await interaction.edit_original_response(content=str(exc))
                 return
 
-        await interaction.response.send_message(
-            "Produto atualizado. Reabra **Preços e estoques** para conferir.",
-            ephemeral=True,
+        await _refresh_store_if_needed(interaction)
+        await interaction.edit_original_response(
+            content="Produto atualizado. O painel publicado também foi atualizado."
         )
 
 
@@ -139,16 +149,18 @@ class ProductStockModal(discord.ui.Modal, title="Configurar estoque"):
             )
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             product = await session.get(Product, self.product_id)
             if product is None:
-                await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Produto não encontrado.")
                 return
             await set_product_stock(session, product=product, stock_quantity=stock)
 
+        await _refresh_store_if_needed(interaction)
         label = "ilimitado" if stock is None else str(stock)
-        await interaction.response.send_message(
-            f"Estoque atualizado para **{label}**.", ephemeral=True
+        await interaction.edit_original_response(
+            content=f"Estoque atualizado para **{label}**."
         )
 
 
@@ -177,15 +189,17 @@ class ProductActionsView(discord.ui.View):
 
     @discord.ui.button(label="Ativar/Desativar", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             product = await session.get(Product, self.product_id)
             if product is None:
-                await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Produto não encontrado.")
                 return
             await set_product_active(session, product=product, active=not product.active)
             active = product.active
-        await interaction.response.send_message(
-            f"Produto {'ativado' if active else 'desativado'}.", ephemeral=True
+        await _refresh_store_if_needed(interaction)
+        await interaction.edit_original_response(
+            content=f"Produto {'ativado' if active else 'desativado'}."
         )
 
 
@@ -200,20 +214,21 @@ class ProductManageSelect(discord.ui.Select):
                     f"{'ativo' if product.active else 'desativado'} • "
                     f"estoque {'∞' if product.stock_quantity is None else product.stock_quantity}"
                 )[:100],
-                emoji=product.emoji or None,
+                emoji=select_option_emoji(product.emoji),
             )
             for product in products[:25]
         ]
         super().__init__(placeholder="Escolha o produto para gerenciar", options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
         product_id = int(self.values[0])
         async with SessionLocal() as session:
             product = await session.get(Product, product_id)
         if product is None:
-            await interaction.response.edit_message(content="Produto não encontrado.", view=None)
+            await interaction.edit_original_response(content="Produto não encontrado.", view=None)
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=None,
             embed=build_product_admin_embed(product),
             view=ProductActionsView(product.id),
@@ -229,16 +244,18 @@ class ProductManagementView(discord.ui.View):
 async def send_product_management(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
+    await interaction.response.defer(ephemeral=True, thinking=True)
     async with SessionLocal() as session:
         products = await list_products(session, guild_id=interaction.guild.id)
     if not products:
-        await interaction.response.send_message(
-            "Ainda não existem produtos. Use **Criar produto** primeiro.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content="Ainda não existem produtos. Use **Criar produto** primeiro.",
+            embed=None,
+            view=None,
         )
         return
-    await interaction.response.send_message(
-        "Escolha um produto:",
+    await interaction.edit_original_response(
+        content="Escolha um produto:",
+        embed=None,
         view=ProductManagementView(products),
-        ephemeral=True,
     )
