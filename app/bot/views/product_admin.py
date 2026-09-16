@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 import discord
 
+from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.emoji import select_option_emoji
 from app.db.models import Product
 from app.db.session import SessionLocal
@@ -14,26 +15,30 @@ from app.services.catalog import (
 )
 
 
-def build_product_admin_embed(product: Product) -> discord.Embed:
+def _product_lines(product: Product) -> list[str]:
     status = "Ativo" if product.active else "Desativado"
     price = format_brl(product.price_credits) if product.price_credits is not None else "Sem preço"
     stock = "Ilimitado" if product.stock_quantity is None else str(product.stock_quantity)
-    embed = discord.Embed(
+    return [
+        product.description or "Sem descrição.",
+        f"**ID:** `{product.id}`",
+        f"**Tipo:** `{product.product_type}`",
+        f"**Jogo:** {product.game_name or '—'}",
+        f"**Preço:** `{price}`",
+        f"**Estoque:** `{stock}`",
+        f"**Entrega:** `{product.delivery_mode}`",
+        f"**Status:** `{status}`",
+        f"**Emoji da loja:** {product.emoji or '—'}",
+    ]
+
+
+def build_product_admin_embed(product: Product) -> discord.Embed:
+    """Compatibilidade com chamadas antigas; a tela ativa usa Components V2."""
+    return discord.Embed(
         title=f"Produto • {product.name}",
-        description=product.description or "Sem descrição.",
+        description="\n".join(_product_lines(product)),
         color=discord.Color.from_rgb(43, 45, 49),
     )
-    embed.add_field(name="ID", value=str(product.id))
-    embed.add_field(name="Tipo", value=product.product_type)
-    embed.add_field(name="Jogo", value=product.game_name or "—")
-    embed.add_field(name="Preço", value=price)
-    embed.add_field(name="Estoque", value=stock)
-    embed.add_field(name="Entrega", value=product.delivery_mode)
-    embed.add_field(name="Status", value=status)
-    embed.add_field(name="Emoji da loja", value=product.emoji or "—")
-    if product.image_url:
-        embed.set_image(url=product.image_url)
-    return embed
 
 
 async def _refresh_store_if_needed(interaction: discord.Interaction) -> None:
@@ -159,9 +164,7 @@ class ProductStockModal(discord.ui.Modal, title="Configurar estoque"):
 
         await _refresh_store_if_needed(interaction)
         label = "ilimitado" if stock is None else str(stock)
-        await interaction.edit_original_response(
-            content=f"Estoque atualizado para **{label}**."
-        )
+        await interaction.edit_original_response(content=f"Estoque atualizado para **{label}**.")
 
 
 class ProductActionsView(discord.ui.View):
@@ -203,6 +206,28 @@ class ProductActionsView(discord.ui.View):
         )
 
 
+class ProductActionsLayout(discord.ui.LayoutView):
+    def __init__(self, product: Product) -> None:
+        super().__init__(timeout=180)
+        card = CardLayout(
+            title=f"Produto • {product.name}",
+            lines=_product_lines(product),
+            image_url=product.image_url,
+            footer="NEXTBUY • Produto",
+            timeout=180,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+
+        legacy = ProductActionsView(product.id)
+        buttons = list(legacy.children)
+        for item in buttons:
+            legacy.remove_item(item)
+        if buttons:
+            add_action_row(self.container, *buttons)
+
+
 class ProductManageSelect(discord.ui.Select):
     def __init__(self, products: list[Product]) -> None:
         options = [
@@ -230,15 +255,23 @@ class ProductManageSelect(discord.ui.Select):
             return
         await interaction.edit_original_response(
             content=None,
-            embed=build_product_admin_embed(product),
-            view=ProductActionsView(product.id),
+            embeds=[],
+            view=ProductActionsLayout(product),
         )
 
 
-class ProductManagementView(discord.ui.View):
+class ProductManagementView(discord.ui.LayoutView):
     def __init__(self, products: list[Product]) -> None:
         super().__init__(timeout=180)
-        self.add_item(ProductManageSelect(products))
+        card = CardLayout(
+            title="Gerenciar produtos",
+            description="Escolha um produto para editar preço, estoque, visual ou status.",
+            timeout=180,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+        add_select_row(self.container, ProductManageSelect(products))
 
 
 async def send_product_management(interaction: discord.Interaction) -> None:
@@ -250,12 +283,12 @@ async def send_product_management(interaction: discord.Interaction) -> None:
     if not products:
         await interaction.edit_original_response(
             content="Ainda não existem produtos. Use **Criar produto** primeiro.",
-            embed=None,
+            embeds=[],
             view=None,
         )
         return
     await interaction.edit_original_response(
-        content="Escolha um produto:",
-        embed=None,
+        content=None,
+        embeds=[],
         view=ProductManagementView(products),
     )
