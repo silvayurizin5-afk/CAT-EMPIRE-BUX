@@ -1,6 +1,16 @@
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.models import Base, TimestampMixin
@@ -36,6 +46,7 @@ class StorePanelConfig(Base, TimestampMixin):
         String(80), default="Termos", server_default="Termos"
     )
     selected_product_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    game_icons: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     published_channel_id: Mapped[int | None] = mapped_column(BigInteger)
     published_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
