@@ -1,5 +1,7 @@
 import discord
 
+from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
+from app.bot.emoji import select_option_emoji
 from app.db.models import TermsDocument
 from app.db.session import SessionLocal
 from app.services.terms import accept_current_terms, list_missing_terms
@@ -10,24 +12,22 @@ def _terms_snapshot(terms: list[TermsDocument]) -> frozenset[tuple[int, int]]:
     return frozenset((item.id, item.version) for item in terms)
 
 
-def build_terms_required_embed(terms: list[TermsDocument]) -> discord.Embed:
-    embed = discord.Embed(
-        title="Termos necessários",
-        description=(
-            "Antes de concluir a compra, leia os termos vigentes abaixo. "
-            "Use o seletor para abrir cada seção e depois aceite para continuar."
-        ),
-    )
+def _terms_lines(terms: list[TermsDocument], selected: TermsDocument | None = None) -> list[str]:
+    if selected is not None:
+        return [
+            selected.content,
+            f"-# Versão {selected.version}",
+        ]
     lines = [
-        f"• {item.emoji + ' ' if item.emoji else ''}**{item.title}** — versão {item.version}"
+        f"- {item.emoji + ' ' if item.emoji else ''}**{item.title}** — versão {item.version}"
         for item in terms
     ]
-    embed.add_field(
-        name="Pendentes",
-        value="\n".join(lines) if lines else "Nenhum termo pendente.",
-        inline=False,
-    )
-    return embed
+    return [
+        "Antes de concluir a compra, leia os termos vigentes abaixo.",
+        "Use o seletor para abrir cada seção e depois aceite para continuar.",
+        "**Pendentes**",
+        *(lines or ["Nenhum termo pendente."]),
+    ]
 
 
 class TermsGateSelect(discord.ui.Select):
@@ -38,14 +38,14 @@ class TermsGateSelect(discord.ui.Select):
                 label=item.title[:100],
                 value=str(item.id),
                 description=f"Versão {item.version}"[:100],
-                emoji=item.emoji or None,
+                emoji=select_option_emoji(item.emoji),
             )
             for item in terms[:25]
         ]
         super().__init__(
             placeholder="Leia os termos antes de aceitar",
             options=options,
-            row=0,
+            custom_id="nextbuy:terms:select",
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -53,26 +53,53 @@ class TermsGateSelect(discord.ui.Select):
         if term is None:
             await interaction.response.send_message("Termo não encontrado.", ephemeral=True)
             return
-        embed = discord.Embed(title=term.title, description=term.content)
-        embed.set_footer(text=f"Versão {term.version}")
-        await interaction.response.edit_message(embed=embed, view=self.view)
+        if isinstance(self.view, TermsGateView):
+            self.view.set_selected(term)
+            await interaction.response.edit_message(content=None, embeds=[], view=self.view)
 
 
-class TermsGateView(discord.ui.View):
-    def __init__(self, terms: list[TermsDocument], resume_view: discord.ui.View) -> None:
+class TermsGateView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        terms: list[TermsDocument],
+        resume_view: discord.ui.View | discord.ui.LayoutView,
+    ) -> None:
         if not terms:
             raise ValueError("TermsGateView exige pelo menos um termo")
         super().__init__(timeout=300)
+        self._terms = terms
         self._terms_versions = _terms_snapshot(terms)
         self._resume_view = resume_view
-        self.add_item(TermsGateSelect(terms))
+        self._selected: TermsDocument | None = None
+        self._render()
 
-    @discord.ui.button(
-        label="Aceitar termos",
-        style=discord.ButtonStyle.success,
-        row=1,
-    )
-    async def accept(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    def _render(self) -> None:
+        self.clear_items()
+        selected = self._selected
+        card = CardLayout(
+            title=selected.title if selected is not None else "Termos necessários",
+            lines=_terms_lines(self._terms, selected),
+            footer="NEXTBUY • Termos",
+            timeout=300,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+
+        add_select_row(self.container, TermsGateSelect(self._terms))
+        accept = discord.ui.Button(
+            label="Aceitar termos",
+            style=discord.ButtonStyle.success,
+            custom_id="nextbuy:terms:accept",
+        )
+        accept.callback = self._accept
+        add_action_row(self.container, accept)
+
+    def set_selected(self, term: TermsDocument) -> None:
+        self._selected = term
+        self._render()
+
+    async def _accept(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
 
@@ -95,21 +122,21 @@ class TermsGateView(discord.ui.View):
         if current_snapshot != self._terms_versions:
             if current_missing:
                 await interaction.edit_original_response(
-                    content="Os termos mudaram. Revise a versão atual antes de continuar.",
-                    embed=build_terms_required_embed(current_missing),
+                    content=None,
+                    embeds=[],
                     view=TermsGateView(current_missing, self._resume_view),
                 )
                 return
             await interaction.edit_original_response(
-                content="Os termos pendentes foram removidos. Confirme a compra novamente.",
-                embed=None,
+                content=None,
+                embeds=[],
                 view=self._resume_view,
             )
             return
 
         await interaction.edit_original_response(
-            content="Termos aceitos. Agora confirme a compra novamente.",
-            embed=None,
+            content=None,
+            embeds=[],
             view=self._resume_view,
         )
 
@@ -117,7 +144,7 @@ class TermsGateView(discord.ui.View):
 async def require_current_terms(
     interaction: discord.Interaction,
     *,
-    resume_view: discord.ui.View,
+    resume_view: discord.ui.View | discord.ui.LayoutView,
 ) -> bool:
     if interaction.guild is None:
         return False
@@ -134,8 +161,8 @@ async def require_current_terms(
         return True
 
     await interaction.edit_original_response(
-        content="Você precisa aceitar os termos vigentes antes de concluir esta compra.",
-        embed=build_terms_required_embed(missing),
+        content=None,
+        embeds=[],
         view=TermsGateView(missing, resume_view),
     )
     return False
