@@ -6,13 +6,9 @@ from app.bot.views.admin_forms import (
     AutoReplyModal,
     ConfigTargetView,
     RankRoleView,
-    RobuxRateModal,
     TermsModal,
 )
-from app.bot.views.automation_admin import (
-    send_auto_reply_management,
-    send_robux_rate_management,
-)
+from app.bot.views.automation_admin import send_auto_reply_management
 from app.bot.views.embed_builder import send_embed_builder
 from app.bot.views.rank_admin import send_rank_tier_management
 from app.bot.views.store_panel_admin import send_store_panel_admin
@@ -31,8 +27,6 @@ ADMIN_ACTIONS = (
         "Embed, produtos, cupons, preços, estoques e publicação",
     ),
     ("store_summary", "Resumo da loja", "Pedidos, entregas e feedbacks"),
-    ("new_rate", "Criar cotação de Robux", "Cadastrar uma nova forma de entrega"),
-    ("manage_rates", "Gerenciar cotações", "Editar ou ativar/desativar cotações"),
     ("embed_builder", "Criar embed avulsa", "Abrir o editor visual com prévia ao vivo"),
     ("new_faq", "Criar resposta automática", "Cadastrar uma nova resposta do FAQ"),
     ("manage_faq", "Gerenciar FAQ", "Editar respostas e botões"),
@@ -52,19 +46,19 @@ def build_admin_embed() -> discord.Embed:
     embed = discord.Embed(
         title="NEXTBUY • Administração",
         description=(
-            "Selecione abaixo o que deseja configurar. A loja agora fica centralizada em "
-            "uma única área, sem espalhar dezenas de botões pelo painel."
+            "Selecione abaixo o que deseja configurar. A loja fica centralizada em "
+            "uma única área, sem cotações ou créditos internos."
         ),
         color=discord.Color.from_rgb(43, 45, 49),
     )
     embed.add_field(
         name="Loja",
-        value="Embed única, produtos, cupons, preços, estoques, publicação e resumo.",
+        value="Embed única, produtos, cupons, preços em reais, estoques e publicação.",
         inline=False,
     )
     embed.add_field(
         name="Automação",
-        value="FAQ, feedbacks, tickets, termos e faixas de cliente.",
+        value="Calculadora, FAQ, feedbacks, tickets, termos e faixas de cliente.",
         inline=False,
     )
     embed.add_field(
@@ -181,14 +175,6 @@ class CompactAdminPanelView(discord.ui.View):
             )
             return
 
-        if action == "new_rate":
-            await interaction.response.send_modal(RobuxRateModal())
-            return
-
-        if action == "manage_rates":
-            await send_robux_rate_management(interaction)
-            return
-
         if action == "new_faq":
             await interaction.response.send_modal(AutoReplyModal())
             return
@@ -265,7 +251,7 @@ class CompactAdminPanelView(discord.ui.View):
                 )
                 return
             await interaction.followup.send(
-                "Ranking publicado e vinculado para atualização automática.",
+                "Ranking publicado e vinculado. Atualização automática: 1 hora.",
                 ephemeral=True,
             )
             return
