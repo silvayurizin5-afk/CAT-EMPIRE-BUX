@@ -4,7 +4,6 @@ from sqlalchemy import func, select
 from app.bot.views.admin import (
     AutoReplyModal,
     ConfigTargetView,
-    ProductModal,
     RankRoleView,
     RobuxRateModal,
     TermsModal,
@@ -15,8 +14,8 @@ from app.bot.views.automation_admin import (
     send_robux_rate_management,
 )
 from app.bot.views.embed_builder import send_embed_builder
-from app.bot.views.product_admin import send_product_management
 from app.bot.views.rank_admin import send_rank_tier_management
+from app.bot.views.store_panel_admin import send_store_panel_admin
 from app.bot.views.terms_admin import send_terms_management
 from app.bot.views.ticket_admin import TicketMessagesModal
 from app.db.models import Feedback, Order
@@ -26,13 +25,15 @@ from app.services.ticket_settings import get_effective_ticket_settings
 
 
 ADMIN_ACTIONS = (
+    (
+        "store_panel",
+        "Configurar loja",
+        "Embed, produtos, cupons, preços, estoques e publicação",
+    ),
     ("store_summary", "Resumo da loja", "Pedidos, entregas e feedbacks"),
-    ("new_product", "Criar produto", "Cadastrar item, Robux ou Game Pass"),
-    ("manage_products", "Gerenciar produtos", "Editar visual, preço, estoque e status"),
     ("new_rate", "Criar cotação de Robux", "Cadastrar uma nova forma de entrega"),
     ("manage_rates", "Gerenciar cotações", "Editar ou ativar/desativar cotações"),
-    ("publish_store", "Publicar painel da loja", "Publicar o painel no canal atual"),
-    ("embed_builder", "Criar embed", "Abrir o editor visual com prévia ao vivo"),
+    ("embed_builder", "Criar embed avulsa", "Abrir o editor visual com prévia ao vivo"),
     ("new_faq", "Criar resposta automática", "Cadastrar uma nova resposta do FAQ"),
     ("manage_faq", "Gerenciar FAQ", "Editar respostas e botões"),
     ("feedback", "Configurar feedbacks", "Emoji, lembretes e permissões"),
@@ -51,14 +52,14 @@ def build_admin_embed() -> discord.Embed:
     embed = discord.Embed(
         title="NEXTBUY • Administração",
         description=(
-            "Selecione abaixo o que deseja configurar. Cada opção abre somente a área "
-            "necessária, sem encher o painel de botões."
+            "Selecione abaixo o que deseja configurar. A loja agora fica centralizada em "
+            "uma única área, sem espalhar dezenas de botões pelo painel."
         ),
         color=discord.Color.from_rgb(43, 45, 49),
     )
     embed.add_field(
         name="Loja",
-        value="Produtos, cotações, publicação e resumo operacional.",
+        value="Embed única, produtos, cupons, preços, estoques, publicação e resumo.",
         inline=False,
     )
     embed.add_field(
@@ -68,7 +69,7 @@ def build_admin_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Servidor",
-        value="Cargos, canais, ranking e criação visual.",
+        value="Cargos, canais, ranking e criação visual avulsa.",
         inline=False,
     )
     embed.set_footer(text="Painel privado • alterações valem para este servidor")
@@ -153,6 +154,10 @@ class CompactAdminPanelView(discord.ui.View):
         if interaction.guild is None:
             return
 
+        if action == "store_panel":
+            await send_store_panel_admin(interaction)
+            return
+
         if action == "store_summary":
             await interaction.response.send_message(
                 embed=await build_store_summary(interaction.guild.id),
@@ -174,14 +179,6 @@ class CompactAdminPanelView(discord.ui.View):
                 view=ConfigTargetView(kind="channel"),
                 ephemeral=True,
             )
-            return
-
-        if action == "new_product":
-            await interaction.response.send_modal(ProductModal())
-            return
-
-        if action == "manage_products":
-            await send_product_management(interaction)
             return
 
         if action == "new_rate":
@@ -251,27 +248,6 @@ class CompactAdminPanelView(discord.ui.View):
 
         if action == "embed_builder":
             await send_embed_builder(interaction)
-            return
-
-        if action == "publish_store":
-            if interaction.channel is None:
-                await interaction.response.send_message("Canal inválido.", ephemeral=True)
-                return
-            from app.bot.views.store import StoreHomeView
-
-            embed = discord.Embed(
-                title="NEXTBUY",
-                description=(
-                    "Compre usando créditos, veja seu perfil e consulte os termos.\n"
-                    "**1 crédito = R$ 1,00.**"
-                ),
-                color=discord.Color.from_rgb(43, 45, 49),
-            )
-            await interaction.channel.send(embed=embed, view=StoreHomeView())
-            await interaction.response.send_message(
-                "Painel da loja publicado neste canal.",
-                ephemeral=True,
-            )
             return
 
         if action == "publish_ranking":
