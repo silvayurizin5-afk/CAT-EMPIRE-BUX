@@ -10,6 +10,10 @@ from app.core.security import verify_mercado_pago_signature
 from app.db.session import get_session
 from app.integrations.mercado_pago import MercadoPagoClient, MercadoPagoError
 from app.integrations.stripe_gateway import StripeWebhookError, verify_stripe_event
+from app.services.stripe_orders import (
+    StripeOrderValidationError,
+    process_stripe_order_checkout_event,
+)
 from app.services.stripe_topups import (
     StripeTopUpValidationError,
     process_stripe_checkout_event,
@@ -37,7 +41,7 @@ async def payment_success() -> str:
         "<!doctype html><html><body style='font-family:sans-serif;background:#111;color:#fff;"
         "display:grid;place-items:center;min-height:100vh'>"
         "<main><h1>Pagamento recebido</h1>"
-        "<p>Você pode voltar para o Discord. Os créditos entram após a confirmação da Stripe.</p>"
+        "<p>Volte para o Discord e use Verificar pagamento para continuar seu pedido.</p>"
         "</main></body></html>"
     )
 
@@ -48,7 +52,7 @@ async def payment_cancel() -> str:
         "<!doctype html><html><body style='font-family:sans-serif;background:#111;color:#fff;"
         "display:grid;place-items:center;min-height:100vh'>"
         "<main><h1>Pagamento cancelado</h1>"
-        "<p>Nenhum crédito foi adicionado. Você pode voltar para o Discord e tentar novamente.</p>"
+        "<p>Nenhuma cobrança foi concluída. Você pode voltar ao Discord e tentar novamente.</p>"
         "</main></body></html>"
     )
 
@@ -87,25 +91,34 @@ async def stripe_webhook(
     if event_type not in checkout_events | incident_events:
         return {"status": "ignored"}
 
+    metadata = resource.get("metadata") or {}
+    is_order_checkout = isinstance(metadata, dict) and bool(metadata.get("order_id"))
+
     try:
         async with session.begin():
-            if event_type in checkout_events:
-                topup = await process_stripe_checkout_event(
+            if event_type in checkout_events and is_order_checkout:
+                processed = await process_stripe_order_checkout_event(
+                    session,
+                    event_type=event_type,
+                    checkout=resource,
+                )
+            elif event_type in checkout_events:
+                processed = await process_stripe_checkout_event(
                     session,
                     event_type=event_type,
                     checkout=resource,
                 )
             else:
-                topup = await process_stripe_incident_event(
+                processed = await process_stripe_incident_event(
                     session,
                     event_type=event_type,
                     resource=resource,
                 )
-    except StripeTopUpValidationError as exc:
+    except (StripeOrderValidationError, StripeTopUpValidationError) as exc:
         logger.warning("Webhook Stripe rejeitado: %s", exc)
         raise HTTPException(status_code=400, detail="invalid stripe event") from exc
 
-    return {"status": "processed" if topup else "ignored"}
+    return {"status": "processed" if processed else "ignored"}
 
 
 @app.post("/webhooks/mercado-pago")
@@ -113,7 +126,7 @@ async def mercado_pago_webhook(
     request: Request,
     session: SessionDep,
 ) -> dict[str, str]:
-    """Compatibilidade temporária para recargas antigas criadas no Mercado Pago."""
+    """Compatibilidade temporária para pagamentos antigos do Mercado Pago."""
     try:
         body = await request.json()
     except ValueError as exc:
@@ -150,9 +163,9 @@ async def mercado_pago_webhook(
 
         async with session.begin():
             if event_type == "order":
-                topup = await process_order_update(session, order=provider_resource)
+                legacy_payment = await process_order_update(session, order=provider_resource)
             else:
-                topup = await process_approved_payment(session, payment=provider_resource)
+                legacy_payment = await process_approved_payment(session, payment=provider_resource)
     except TopUpValidationError as exc:
         logger.warning("Webhook legado do Mercado Pago rejeitado: %s", exc)
         raise HTTPException(status_code=400, detail="invalid payment") from exc
@@ -160,4 +173,4 @@ async def mercado_pago_webhook(
         logger.exception("Falha ao consultar Mercado Pago")
         raise HTTPException(status_code=502, detail="provider unavailable") from exc
 
-    return {"status": "processed" if topup else "ignored"}
+    return {"status": "processed" if legacy_payment else "ignored"}
