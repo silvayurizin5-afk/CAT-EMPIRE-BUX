@@ -32,7 +32,7 @@ class RobuxQuote:
 
 
 _ROBUX_WORD = re.compile(r"\brobux\b", re.IGNORECASE)
-_MONEY_WORD = re.compile(r"(?:r\$|\breais?\b)", re.IGNORECASE)
+_MONEY_WORD = re.compile(r"(?:r\$|\breal\b|\breais\b)", re.IGNORECASE)
 _NUMBER = re.compile(r"(?<!\d)(\d{1,9}(?:[.,]\d{1,2})?)(?!\d)")
 _BARE_INTEGER = re.compile(r"^\s*(\d{1,9})\s*$")
 _COUPON = re.compile(r'"([^"\n]{1,40})"')
