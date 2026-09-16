@@ -36,6 +36,24 @@ class StorePanelConfig(Base, TimestampMixin):
     product_placeholder: Mapped[str] = mapped_column(
         String(100), default="Selecione um produto", server_default="Selecione um produto"
     )
+    product_count_label: Mapped[str] = mapped_column(
+        String(100), default="Produtos disponíveis", server_default="Produtos disponíveis"
+    )
+    checkout_title_template: Mapped[str] = mapped_column(
+        String(256), default="{emoji} {product}", server_default="{emoji} {product}"
+    )
+    checkout_description: Mapped[str] = mapped_column(
+        Text,
+        default="Confira os detalhes antes de continuar com a compra.",
+        server_default="Confira os detalhes antes de continuar com a compra.",
+    )
+    buy_button_label: Mapped[str] = mapped_column(
+        String(80), default="Comprar", server_default="Comprar"
+    )
+    coupon_button_label: Mapped[str] = mapped_column(
+        String(80), default="Adicionar cupom", server_default="Adicionar cupom"
+    )
+    # Campos legados mantidos apenas para compatibilidade com registros antigos.
     topup_label: Mapped[str] = mapped_column(
         String(80), default="Adicionar créditos", server_default="Adicionar créditos"
     )
