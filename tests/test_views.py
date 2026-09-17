@@ -5,14 +5,22 @@ from app.bot.views.automation_admin import AutoReplyActionsView, RobuxRateAction
 from app.bot.views.product_admin import ProductActionsView
 from app.bot.views.rank_admin import FullAdminPanelView, RankTierActionsView
 from app.bot.views.terms_admin import TermsActionsView
-from app.bot.views.terms_gate import TermsGateView, build_terms_required_embed
+from app.bot.views.terms_gate import TermsGateView
 from app.db.models import TermsDocument
 
 
-def _button_labels(view: discord.ui.View) -> set[str]:
+def _walk_items(items):
+    for item in items:
+        yield item
+        children = getattr(item, "children", None)
+        if children:
+            yield from _walk_items(children)
+
+
+def _button_labels(view: discord.ui.View | discord.ui.LayoutView) -> set[str]:
     return {
         item.label
-        for item in view.children
+        for item in _walk_items(view.children)
         if isinstance(item, discord.ui.Button) and item.label is not None
     }
 
@@ -89,15 +97,18 @@ async def test_terms_gate_exposes_review_and_acceptance() -> None:
     ]
     resume_view = discord.ui.View(timeout=30)
     gate = TermsGateView(terms, resume_view)
+    nested = list(_walk_items(gate.children))
 
     labels = _button_labels(gate)
     assert "Aceitar termos" in labels
-    assert any(isinstance(item, discord.ui.Select) for item in gate.children)
+    assert any(isinstance(item, discord.ui.Select) for item in nested)
 
-    embed = build_terms_required_embed(terms)
-    assert embed.title == "Termos necessários"
-    assert "Segurança" in embed.fields[0].value
-    assert "versão 2" in embed.fields[0].value
+    text = "\n".join(
+        item.content for item in nested if isinstance(item, discord.ui.TextDisplay)
+    )
+    assert "Termos necessários" in text
+    assert "Segurança" in text
+    assert "versão 2" in text
 
     gate.stop()
     resume_view.stop()
