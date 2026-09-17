@@ -14,32 +14,26 @@ from app.services.delivery_settings import (
     render_delivery,
 )
 
-_GAME_PRODUCT_TYPES = {"item", "gamepass", "game_pass", "gift"}
-
-
-def _product_type(item) -> str:
-    return str((item.metadata_json or {}).get("product_type") or "").strip().lower().replace(" ", "_")
-
 
 def _delivery_image(items) -> str | None:
-    """Compatibilidade para testes: retorna a foto congelada de item/Game Pass quando existir."""
+    """Retorna a primeira imagem congelada do pedido, independente do tipo cadastrado."""
     for item in items:
-        if _product_type(item) in _GAME_PRODUCT_TYPES and item.image_url_snapshot:
-            return item.image_url_snapshot
+        image = str(item.image_url_snapshot or "").strip()
+        if image:
+            return image
     return None
 
 
 def _delivery_item_lines(items) -> list[str]:
-    """Formato padrão sem seta; o runtime real usa o template configurado no admin."""
+    """Resumo simples usado apenas por testes/compatibilidade."""
     if not items:
         return ["Pedido sem itens cadastrados"]
     lines: list[str] = []
     for item in items:
         quantity = int(item.quantity or 1)
-        suffix = f" × `{quantity}`" if quantity > 1 else ""
         game_name = str((item.metadata_json or {}).get("game_name") or "").strip()
         game = f" • {game_name}" if game_name else ""
-        lines.append(f"**{item.name_snapshot}**{game}{suffix}")
+        lines.append(f"**{item.name_snapshot}**{game} × `{quantity}`")
     return lines
 
 
@@ -72,16 +66,13 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
         client_mention=mention,
         items=items,
     )
-    image_url = (
-        await tickets.resolve_order_image(items, game_products_only=True)
-        if show_image
-        else None
-    )
 
+    image_url = await tickets.resolve_order_image(items) if show_image else None
+    display_lines = ([title] if title else []) + lines
     view = CardLayout(
-        title=title,
-        lines=lines,
-        footer=footer,
+        title=None,
+        lines=display_lines,
+        footer=footer or None,
         image_url=image_url,
         accent_colour=accent,
         timeout=None,
