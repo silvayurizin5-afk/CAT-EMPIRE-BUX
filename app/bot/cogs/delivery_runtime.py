@@ -3,7 +3,6 @@ import re
 import discord
 from sqlalchemy import select
 
-from app.bot.components_v2 import CardLayout
 from app.bot.workflows import tickets
 from app.db.models import Order, Product
 from app.db.session import SessionLocal
@@ -41,8 +40,14 @@ _DEFAULT_PRODUCT_TEMPLATES = {
 _DYNAMIC_PRODUCT_TEMPLATE = (
     "> **{game_emoji} {game_or_product}**\n"
     "**• {product_emoji} {product} {quantity}× · {line_total}{robux_part}**\n"
-    "{discount_line}\n"
+    "{discount_line}"
 )
+_THUMBNAIL_PRODUCT_TEMPLATE = (
+    "> **{game_or_product}**\n"
+    "**• {product_emoji} {product} {quantity}× · {line_total}{robux_part}**\n"
+    "{discount_line}"
+)
+_PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
 
 
 def _delivery_image(items) -> str | None:
@@ -100,15 +105,24 @@ def _inline_emoji_from_asset(value: str | None) -> str:
     return normalized if _CUSTOM_EMOJI_RE.fullmatch(normalized) else ""
 
 
+def _regular_image_url(value: str | None) -> str | None:
+    """Retorna apenas imagens HTTP comuns; URLs de emoji do Discord viram emoji inline."""
+    raw = str(value or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return None
+    if _DISCORD_EMOJI_URL_RE.fullmatch(raw):
+        return None
+    return raw
+
+
 async def _delivery_context(
     guild_id: int,
     items,
 ) -> dict[str, object] | None:
-    """Enriquece a entrega com emoji real do jogo/produto sem criar banner.
+    """Enriquece a entrega com o visual do jogo e do produto sem criar banner.
 
-    O Discord só permite uma imagem pequena à esquerda do texto quando ela é um emoji
-    customizado. Por isso URLs do CDN de emojis viram menções de emoji; imagens comuns
-    continuam salvas no produto, mas não são enviadas como MediaGallery na entrega.
+    Emoji customizado fica inline. Imagem HTTP comum vira Thumbnail pequena no bloco
+    daquele produto. Nenhum asset de produto/jogo é enviado como MediaGallery.
     """
     product_ids = [int(item.product_id) for item in items if item.product_id]
     async with SessionLocal() as session:
@@ -148,34 +162,43 @@ async def _delivery_context(
             if not metadata.get("product_type") and product.product_type:
                 metadata["product_type"] = product.product_type
 
-        product_emoji = _inline_emoji_from_asset(
-            str(metadata.get("product_emoji") or "")
-        )
+        raw_product_emoji = str(metadata.get("product_emoji") or "").strip()
+        product_emoji = _inline_emoji_from_asset(raw_product_emoji)
         if product_emoji:
             metadata["product_emoji"] = product_emoji
+        elif raw_product_emoji:
+            metadata.pop("product_emoji", None)
 
-        product_image = str(metadata.get("product_image_url") or item.image_url_snapshot or "").strip()
         game_name = str(metadata.get("game_name") or "").strip()
         if game_name:
             configured_game_icon = str(
                 game_icons.get(normalize_text(game_name)) or ""
             ).strip()
-            game_emoji = _inline_emoji_from_asset(
-                str(metadata.get("game_emoji") or configured_game_icon)
-            )
-
-            if not game_emoji and use_asset_icon:
-                # Se a imagem do jogo/produto veio de um emoji do Discord, ela pode aparecer
-                # exatamente ao lado do nome do jogo, no lugar da caixa genérica.
-                game_emoji = _inline_emoji_from_asset(product_image)
-
-            if not game_emoji and use_asset_icon:
-                # Pedidos antigos podem ter somente o emoji visual no Product. Reaproveitamos
-                # esse emoji na linha do jogo em vez de mostrar a caixa genérica.
-                game_emoji = product_emoji
+            raw_game_asset = str(metadata.get("game_emoji") or configured_game_icon).strip()
+            game_emoji = _inline_emoji_from_asset(raw_game_asset)
 
             if game_emoji:
                 metadata["game_emoji"] = game_emoji
+                metadata.pop("game_thumbnail_url", None)
+            else:
+                metadata.pop("game_emoji", None)
+                if use_asset_icon:
+                    thumbnail = _regular_image_url(raw_game_asset)
+                    if thumbnail is None:
+                        thumbnail = _regular_image_url(
+                            str(metadata.get("product_image_url") or item.image_url_snapshot or "")
+                        )
+                    if thumbnail:
+                        metadata["game_thumbnail_url"] = thumbnail
+
+                if "game_thumbnail_url" not in metadata and use_asset_icon:
+                    # Se não houver imagem comum, um emoji de imagem do produto pode ser usado
+                    # inline; nunca é transformado em banner.
+                    product_image_emoji = _inline_emoji_from_asset(
+                        str(metadata.get("product_image_url") or item.image_url_snapshot or "")
+                    )
+                    if product_image_emoji:
+                        metadata["game_emoji"] = product_image_emoji
 
         item.metadata_json = metadata
 
@@ -189,15 +212,8 @@ def _format_template(template: str, values: dict[str, object]) -> str:
         raise ValueError(f"Template de entrega inválido: {exc}") from exc
 
 
-def _render_delivery(
-    raw_config: dict[str, object] | None,
-    *,
-    order_id,
-    client_mention: str,
-    items,
-) -> tuple[str, list[str], str, int, bool]:
-    config = effective_delivery_config(raw_config)
-    common = {
+def _common_values(config: dict[str, object], order_id, client_mention: str) -> dict[str, object]:
+    return {
         "delivery": str(config["delivery_emoji"]),
         "arrow": str(config["arrow_emoji"]),
         "user": str(config["user_emoji"]),
@@ -215,35 +231,131 @@ def _render_delivery(
         "order_short": str(order_id)[:8],
     }
 
-    configured_template = str(config["product_template"])
-    product_template = (
-        _DYNAMIC_PRODUCT_TEMPLATE
-        if configured_template in _DEFAULT_PRODUCT_TEMPLATES
-        else configured_template
-    )
-    rendered_products: list[str] = []
-    for item in items:
-        rendered = _format_template(
-            product_template,
-            {**common, **product_line_values(item, config)},
-        ).strip()
-        if rendered:
-            rendered_products.append(rendered)
-    if not rendered_products:
-        rendered_products.append("Pedido sem itens cadastrados")
 
-    values = {**common, "products": "\n\n".join(rendered_products)}
-    title = _format_template(str(config["title_template"]), values).strip()
-    body = _format_template(str(config["body_template"]), values).strip()
-    footer = _format_template(str(config["footer_template"]), values).strip()
-    lines = body.splitlines() if body else []
-    return (
-        title,
-        lines,
-        footer,
-        parse_hex_color(config["accent_color"]),
-        bool(config["show_image"]),
+def _render_product_blocks(
+    config: dict[str, object],
+    common: dict[str, object],
+    items,
+) -> list[tuple[str, str | None]]:
+    configured_template = str(config["product_template"])
+    default_template = configured_template in _DEFAULT_PRODUCT_TEMPLATES
+    blocks: list[tuple[str, str | None]] = []
+
+    for item in items:
+        metadata = dict(item.metadata_json or {})
+        thumbnail_url = _regular_image_url(str(metadata.get("game_thumbnail_url") or ""))
+        values = product_line_values(item, config)
+
+        if default_template:
+            template = _THUMBNAIL_PRODUCT_TEMPLATE if thumbnail_url else _DYNAMIC_PRODUCT_TEMPLATE
+        else:
+            template = configured_template
+            if thumbnail_url and not metadata.get("game_emoji"):
+                values["game_emoji"] = ""
+
+        rendered = _format_template(template, {**common, **values}).strip()
+        if rendered:
+            blocks.append((rendered, thumbnail_url))
+
+    if not blocks:
+        blocks.append(("Pedido sem itens cadastrados", None))
+    return blocks
+
+
+def _render_delivery_sections(
+    raw_config: dict[str, object] | None,
+    *,
+    order_id,
+    client_mention: str,
+    items,
+) -> tuple[str, list[str], list[tuple[str, str | None]], list[str], str, int]:
+    config = effective_delivery_config(raw_config)
+    common = _common_values(config, order_id, client_mention)
+    blocks = _render_product_blocks(config, common, items)
+
+    title = _format_template(str(config["title_template"]), common).strip()
+    body_with_marker = _format_template(
+        str(config["body_template"]),
+        {**common, "products": _PRODUCTS_MARKER},
+    ).strip()
+    footer = _format_template(str(config["footer_template"]), common).strip()
+
+    if _PRODUCTS_MARKER in body_with_marker:
+        before, after = body_with_marker.split(_PRODUCTS_MARKER, 1)
+        before_lines = before.strip().splitlines() if before.strip() else []
+        after_lines = after.strip().splitlines() if after.strip() else []
+    else:
+        before_lines = body_with_marker.splitlines() if body_with_marker else []
+        after_lines = []
+
+    return title, before_lines, blocks, after_lines, footer, parse_hex_color(config["accent_color"])
+
+
+def _render_delivery(
+    raw_config: dict[str, object] | None,
+    *,
+    order_id,
+    client_mention: str,
+    items,
+) -> tuple[str, list[str], str, int, bool]:
+    title, before, blocks, after, footer, accent = _render_delivery_sections(
+        raw_config,
+        order_id=order_id,
+        client_mention=client_mention,
+        items=items,
     )
+    lines = list(before)
+    for block, _ in blocks:
+        lines.extend(block.splitlines())
+    lines.extend(after)
+    config = effective_delivery_config(raw_config)
+    return title, lines, footer, accent, bool(config["show_image"])
+
+
+class DeliveryPublicLayout(discord.ui.LayoutView):
+    """Mensagem pública de entrega sem banner; imagens ficam como Thumbnail do produto."""
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        before_lines: list[str],
+        product_blocks: list[tuple[str, str | None]],
+        after_lines: list[str],
+        footer: str,
+        accent: int,
+    ) -> None:
+        super().__init__(timeout=None)
+        children: list[discord.ui.Item] = []
+
+        header = "\n".join(([title] if title else []) + before_lines).strip()
+        if header:
+            children.append(discord.ui.TextDisplay(header))
+
+        for block, thumbnail_url in product_blocks:
+            if thumbnail_url:
+                children.append(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(block),
+                        accessory=discord.ui.Thumbnail(thumbnail_url),
+                    )
+                )
+            else:
+                children.append(discord.ui.TextDisplay(block))
+
+        tail = "\n".join(after_lines).strip()
+        if tail:
+            children.append(discord.ui.TextDisplay(tail))
+
+        if footer:
+            children.append(discord.ui.Separator())
+            children.append(discord.ui.TextDisplay(f"-# {footer}"))
+
+        if not children:
+            children.append(discord.ui.TextDisplay("\u200b"))
+
+        self.container = discord.ui.Container(*children, accent_colour=accent)
+        self.add_item(self.container)
 
 
 async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
@@ -261,26 +373,24 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
     member = guild.get_member(user.discord_user_id)
     mention = member.mention if member else f"<@{user.discord_user_id}>"
     raw_config = await _delivery_context(guild.id, items)
-    title, lines, footer, accent, _ = _render_delivery(
+    title, before, blocks, after, footer, accent = _render_delivery_sections(
         raw_config,
         order_id=order.id,
         client_mention=mention,
         items=items,
     )
 
-    # A imagem do jogo não é mais publicada como banner. O visual do jogo é resolvido
-    # para um emoji inline na linha do nome (quando disponível).
-    display_lines = ([title] if title else []) + lines
-    view = CardLayout(
-        title=None,
-        lines=display_lines,
-        footer=footer or None,
-        image_url=None,
-        accent_colour=accent,
-        timeout=None,
-    )
+    # Nunca enviar image_url/MediaGallery aqui. Imagens de jogo ficam somente como
+    # Thumbnail pequena no Section do produto correspondente.
     message = await channel.send(
-        view=view,
+        view=DeliveryPublicLayout(
+            title=title,
+            before_lines=before,
+            product_blocks=blocks,
+            after_lines=after,
+            footer=footer,
+            accent=accent,
+        ),
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
 
@@ -297,6 +407,7 @@ async def setup(bot) -> None:
 __all__ = [
     "ARROW_EMOJI",
     "BOX_EMOJI",
+    "DeliveryPublicLayout",
     "MEMBER_EMOJI",
     "VERIFY_EMOJI",
     "_delivery_image",
@@ -304,6 +415,8 @@ __all__ = [
     "_emoji_image_url",
     "_inline_emoji_from_asset",
     "_normalize_emoji",
+    "_regular_image_url",
     "_render_delivery",
+    "_render_delivery_sections",
     "publish_delivery",
 ]
