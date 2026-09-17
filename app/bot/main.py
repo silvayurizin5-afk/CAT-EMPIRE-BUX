@@ -48,6 +48,7 @@ class NextBuyBot(commands.Bot):
         await self.load_extension("app.bot.cogs.staff")
         await self.load_extension("app.bot.cogs.feedback")
         await self.load_extension("app.bot.cogs.automation_runtime")
+        await self.load_extension("app.bot.cogs.automation_refinement")
         await self.load_extension("app.bot.cogs.delivery_runtime")
         await self.load_extension("app.bot.cogs.ticket_automation")
         await self.load_extension("app.bot.cogs.audit_logs")
