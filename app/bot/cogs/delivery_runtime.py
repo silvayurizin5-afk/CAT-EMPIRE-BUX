@@ -46,7 +46,7 @@ _DYNAMIC_PRODUCT_TEMPLATE = (
 
 
 def _delivery_image(items) -> str | None:
-    """Retorna a primeira imagem congelada do pedido, independente do tipo cadastrado."""
+    """Retorna a primeira imagem congelada do pedido, para compatibilidade/testes."""
     for item in items:
         image = str(item.image_url_snapshot or "").strip()
         if image:
@@ -94,14 +94,21 @@ def _emoji_image_url(value: str | None) -> str | None:
     )
 
 
+def _inline_emoji_from_asset(value: str | None) -> str:
+    """Converte somente assets que realmente podem aparecer inline no texto do Discord."""
+    normalized = _normalize_emoji(value)
+    return normalized if _CUSTOM_EMOJI_RE.fullmatch(normalized) else ""
+
+
 async def _delivery_context(
     guild_id: int,
     items,
-) -> tuple[dict[str, object] | None, str | None]:
-    """Enriquece pedidos antigos com o visual atual do produto/jogo.
+) -> dict[str, object] | None:
+    """Enriquece a entrega com emoji real do jogo/produto sem criar banner.
 
-    Pedidos novos já guardam emoji e imagem no snapshot. Para pedidos anteriores a esse snapshot,
-    buscamos o Product atual e o ícone do jogo salvo no painel da loja.
+    O Discord só permite uma imagem pequena à esquerda do texto quando ela é um emoji
+    customizado. Por isso URLs do CDN de emojis viram menções de emoji; imagens comuns
+    continuam salvas no produto, mas não são enviadas como MediaGallery na entrega.
     """
     product_ids = [int(item.product_id) for item in items if item.product_id]
     async with SessionLocal() as session:
@@ -121,9 +128,11 @@ async def _delivery_context(
                 ).all()
             )
 
+    raw_config = dict(panel.delivery_config or {}) if panel is not None else None
+    config = effective_delivery_config(raw_config)
+    use_asset_icon = bool(config["show_image"])
     by_id = {product.id: product for product in products}
     game_icons = dict(panel.game_icons or {}) if panel is not None else {}
-    fallback_image: str | None = None
 
     for item in items:
         metadata = dict(item.metadata_json or {})
@@ -138,36 +147,39 @@ async def _delivery_context(
                 metadata["game_name"] = product.game_name
             if not metadata.get("product_type") and product.product_type:
                 metadata["product_type"] = product.product_type
-            if not item.image_url_snapshot and product.image_url:
-                item.image_url_snapshot = product.image_url
 
-        product_emoji = _normalize_emoji(str(metadata.get("product_emoji") or ""))
+        product_emoji = _inline_emoji_from_asset(
+            str(metadata.get("product_emoji") or "")
+        )
         if product_emoji:
             metadata["product_emoji"] = product_emoji
-            fallback_image = fallback_image or _emoji_image_url(product_emoji)
 
+        product_image = str(metadata.get("product_image_url") or item.image_url_snapshot or "").strip()
         game_name = str(metadata.get("game_name") or "").strip()
         if game_name:
             configured_game_icon = str(
                 game_icons.get(normalize_text(game_name)) or ""
             ).strip()
-            game_emoji = _normalize_emoji(
+            game_emoji = _inline_emoji_from_asset(
                 str(metadata.get("game_emoji") or configured_game_icon)
             )
+
+            if not game_emoji and use_asset_icon:
+                # Se a imagem do jogo/produto veio de um emoji do Discord, ela pode aparecer
+                # exatamente ao lado do nome do jogo, no lugar da caixa genérica.
+                game_emoji = _inline_emoji_from_asset(product_image)
+
+            if not game_emoji and use_asset_icon:
+                # Pedidos antigos podem ter somente o emoji visual no Product. Reaproveitamos
+                # esse emoji na linha do jogo em vez de mostrar a caixa genérica.
+                game_emoji = product_emoji
+
             if game_emoji:
                 metadata["game_emoji"] = game_emoji
-                fallback_image = fallback_image or _emoji_image_url(
-                    configured_game_icon or game_emoji
-                )
-
-        product_image = str(metadata.get("product_image_url") or "").strip()
-        if product_image:
-            fallback_image = product_image
 
         item.metadata_json = metadata
 
-    config = dict(panel.delivery_config or {}) if panel is not None else None
-    return config, fallback_image
+    return raw_config
 
 
 def _format_template(template: str, values: dict[str, object]) -> str:
@@ -248,25 +260,22 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
 
     member = guild.get_member(user.discord_user_id)
     mention = member.mention if member else f"<@{user.discord_user_id}>"
-    raw_config, fallback_image = await _delivery_context(guild.id, items)
-    title, lines, footer, accent, show_image = _render_delivery(
+    raw_config = await _delivery_context(guild.id, items)
+    title, lines, footer, accent, _ = _render_delivery(
         raw_config,
         order_id=order.id,
         client_mention=mention,
         items=items,
     )
 
-    image_url = None
-    if show_image:
-        image_url = await tickets.resolve_order_image(items)
-        image_url = image_url or fallback_image
-
+    # A imagem do jogo não é mais publicada como banner. O visual do jogo é resolvido
+    # para um emoji inline na linha do nome (quando disponível).
     display_lines = ([title] if title else []) + lines
     view = CardLayout(
         title=None,
         lines=display_lines,
         footer=footer or None,
-        image_url=image_url,
+        image_url=None,
         accent_colour=accent,
         timeout=None,
     )
@@ -293,6 +302,7 @@ __all__ = [
     "_delivery_image",
     "_delivery_item_lines",
     "_emoji_image_url",
+    "_inline_emoji_from_asset",
     "_normalize_emoji",
     "_render_delivery",
     "publish_delivery",
