@@ -1,18 +1,12 @@
 import re
-from datetime import UTC, datetime
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from sqlalchemy import select
 
 from app.db.models import GuildConfig
 from app.db.session import SessionLocal
-from app.services.feedback import (
-    due_channel_reminders,
-    due_dm_reminders,
-    list_pending_orders_for_feedback,
-    submit_feedback,
-)
+from app.services.feedback import list_pending_orders_for_feedback, submit_feedback
 
 FEEDBACK_RE = re.compile(
     r"^\s*([1-5])(?:\s*(?:/\s*5|estrelas?|stars?|⭐+))?"
@@ -36,10 +30,6 @@ def parse_feedback_message(content: str) -> tuple[int, str | None, str] | None:
 class FeedbackCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.reminder_worker.start()
-
-    def cog_unload(self) -> None:
-        self.reminder_worker.cancel()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -92,7 +82,7 @@ class FeedbackCog(commands.Cog):
             if order_prefix:
                 guidance = (
                     "Não achei um único pedido pendente com esse código. "
-                    "Use o código de 8 caracteres mostrado no lembrete."
+                    "Confira os 8 primeiros caracteres do ID do pedido."
                 )
             else:
                 examples = ", ".join(f"`#{str(row[0].id)[:8]}`" for row in pending_rows[:5])
@@ -111,61 +101,6 @@ class FeedbackCog(commands.Cog):
             await message.add_reaction(config.feedback_emoji or "🐱")
         except discord.HTTPException:
             pass
-
-    @tasks.loop(seconds=60)
-    async def reminder_worker(self) -> None:
-        now = datetime.now(UTC)
-        async with SessionLocal() as session:
-            channel_rows = await due_channel_reminders(session, now=now)
-            dm_rows = await due_dm_reminders(session, now=now)
-
-        for reminder, order, user, config in channel_rows:
-            guild = self.bot.get_guild(order.guild_id)
-            if guild is None or not config.feedback_channel_id:
-                continue
-            channel = guild.get_channel(config.feedback_channel_id)
-            if not isinstance(channel, discord.TextChannel):
-                continue
-            short_id = str(order.id)[:8]
-            try:
-                await channel.send(
-                    (
-                        f"<@{user.discord_user_id}> quando puder, avalie o pedido "
-                        f"`{short_id}`. Use **1 a 5 - seu feedback**. "
-                        f"Se tiver mais de um pendente, use **5 #{short_id} - seu feedback**."
-                    ),
-                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-                )
-            except discord.HTTPException:
-                continue
-            async with SessionLocal() as session, session.begin():
-                db_reminder = await session.get(type(reminder), reminder.id)
-                if db_reminder and db_reminder.completed_at is None:
-                    db_reminder.channel_mention_sent_at = now
-
-        for reminder, order, user, _config in dm_rows:
-            discord_user = self.bot.get_user(user.discord_user_id)
-            if discord_user is None:
-                try:
-                    discord_user = await self.bot.fetch_user(user.discord_user_id)
-                except discord.NotFound:
-                    continue
-            short_id = str(order.id)[:8]
-            try:
-                await discord_user.send(
-                    f"Você ainda tem uma avaliação pendente do pedido `{short_id}` na NEXTBUY. "
-                    f"No canal de feedbacks, você pode usar `5 #{short_id} - seu feedback`."
-                )
-            except discord.Forbidden:
-                pass
-            async with SessionLocal() as session, session.begin():
-                db_reminder = await session.get(type(reminder), reminder.id)
-                if db_reminder and db_reminder.completed_at is None:
-                    db_reminder.dm_sent_at = now
-
-    @reminder_worker.before_loop
-    async def before_reminder_worker(self) -> None:
-        await self.bot.wait_until_ready()
 
 
 async def setup(bot: commands.Bot) -> None:
