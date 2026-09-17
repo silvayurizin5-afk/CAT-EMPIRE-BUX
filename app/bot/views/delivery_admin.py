@@ -31,7 +31,8 @@ class DeliveryMessageModal(discord.ui.Modal, title="Mensagem de entrega"):
     def __init__(self, config: dict[str, object]) -> None:
         super().__init__()
         self.title_template = discord.ui.TextInput(
-            label="Título",
+            label="Primeira linha / título (aceita markdown)",
+            required=False,
             max_length=256,
             default=str(config["title_template"])[:256],
         )
@@ -42,9 +43,10 @@ class DeliveryMessageModal(discord.ui.Modal, title="Mensagem de entrega"):
             default=str(config["body_template"])[:3000],
         )
         self.product_template = discord.ui.TextInput(
-            label="Linha de cada produto",
-            max_length=500,
-            default=str(config["product_template"])[:500],
+            label="Bloco de cada produto",
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+            default=str(config["product_template"])[:1000],
         )
         self.footer_template = discord.ui.TextInput(
             label="Rodapé",
@@ -97,26 +99,8 @@ class DeliveryVisualModal(discord.ui.Modal, title="Visual da entrega"):
             max_length=3,
             default="sim" if bool(config["show_image"]) else "não",
         )
-        self.verify = discord.ui.TextInput(
-            label="Emoji de verificação",
-            required=False,
-            max_length=128,
-            default=str(config["verify_emoji"])[:128],
-        )
-        self.member = discord.ui.TextInput(
-            label="Emoji de cliente",
-            required=False,
-            max_length=128,
-            default=str(config["member_emoji"])[:128],
-        )
-        self.box = discord.ui.TextInput(
-            label="Emoji de produtos",
-            required=False,
-            max_length=128,
-            default=str(config["box_emoji"])[:128],
-        )
-        for item in (self.accent, self.show_image, self.verify, self.member, self.box):
-            self.add_item(item)
+        self.add_item(self.accent)
+        self.add_item(self.show_image)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -149,17 +133,73 @@ class DeliveryVisualModal(discord.ui.Modal, title="Visual da entrega"):
             {
                 "accent_color": "#" + accent.lstrip("#").upper(),
                 "show_image": answer == "sim",
-                "verify_emoji": str(self.verify).strip(),
-                "member_emoji": str(self.member).strip(),
-                "box_emoji": str(self.box).strip(),
             }
         )
-        try:
-            await _save_config(interaction.guild.id, config)
-        except ValueError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
+        await _save_config(interaction.guild.id, config)
         await interaction.response.send_message("Visual de entrega atualizado.", ephemeral=True)
+
+
+class DeliveryEmojiModal(discord.ui.Modal, title="Emojis principais da entrega"):
+    def __init__(self, config: dict[str, object]) -> None:
+        super().__init__()
+        fields = (
+            ("delivery", "Emoji Entrega Realizada", "delivery_emoji"),
+            ("arrow", "Emoji seta", "arrow_emoji"),
+            ("user", "Emoji cliente", "user_emoji"),
+            ("separator", "Emoji separador", "separator_emoji"),
+            ("verified", "Emoji status verificado", "verified_emoji"),
+        )
+        self._keys: list[tuple[str, discord.ui.TextInput]] = []
+        for attr, label, key in fields:
+            field = discord.ui.TextInput(
+                label=label,
+                required=False,
+                max_length=128,
+                default=str(config[key])[:128],
+            )
+            setattr(self, attr, field)
+            self._keys.append((key, field))
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        config = await _load_config(interaction.guild.id)
+        for key, field in self._keys:
+            config[key] = str(field).strip()
+        await _save_config(interaction.guild.id, config)
+        await interaction.response.send_message("Emojis principais atualizados.", ephemeral=True)
+
+
+class DeliveryProductEmojiModal(discord.ui.Modal, title="Emojis dos produtos"):
+    def __init__(self, config: dict[str, object]) -> None:
+        super().__init__()
+        fields = (
+            ("order_icon", "Emoji Produto(s)", "order_emoji"),
+            ("game", "Emoji do jogo", "game_emoji"),
+            ("product", "Emoji do produto", "product_emoji"),
+            ("discount", "Emoji do desconto", "discount_emoji"),
+        )
+        self._keys: list[tuple[str, discord.ui.TextInput]] = []
+        for attr, label, key in fields:
+            field = discord.ui.TextInput(
+                label=label,
+                required=False,
+                max_length=128,
+                default=str(config[key])[:128],
+            )
+            setattr(self, attr, field)
+            self._keys.append((key, field))
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        config = await _load_config(interaction.guild.id)
+        for key, field in self._keys:
+            config[key] = str(field).strip()
+        await _save_config(interaction.guild.id, config)
+        await interaction.response.send_message("Emojis de produtos atualizados.", ephemeral=True)
 
 
 class DeliveryAdminView(discord.ui.LayoutView):
@@ -170,33 +210,39 @@ class DeliveryAdminView(discord.ui.LayoutView):
             title="NEXTBUY • Entregas",
             description="Configure livremente a mensagem publicada quando um pedido é entregue.",
             lines=[
-                "**Placeholders gerais:** `{client}`, `{order}`, `{order_short}`, `{verify}`, `{member}`, `{box}`, `{products}`",
-                "**Na linha do produto:** `{product}`, `{game}`, `{game_part}`, `{quantity}`, `{quantity_part}`, `{unit_price}`, `{line_total}`",
-                "Você pode colocar texto, markdown e emojis customizados do servidor diretamente nos templates.",
+                "**Gerais:** `{client}`, `{order}`, `{order_short}`, `{products}`",
+                "**Emojis:** `{delivery}`, `{arrow}`, `{user}`, `{separator}`, `{verified}`, `{order_icon}`, `{game_emoji}`, `{product_emoji}`, `{discount_emoji}`",
+                "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
+                "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
             ],
-            footer="A imagem usa a foto salva no pedido; se não houver snapshot, tenta a imagem atual do produto.",
+            footer="A imagem usa primeiro a foto congelada no pedido e depois a imagem atual do produto.",
             timeout=900,
         )
         self.container = card.container
         card.remove_item(card.container)
         self.add_item(self.container)
 
-        edit_message = discord.ui.Button(
-            label="Editar mensagem",
-            style=discord.ButtonStyle.primary,
-        )
+        edit_message = discord.ui.Button(label="Mensagem", style=discord.ButtonStyle.primary)
         edit_message.callback = self._edit_message
-        edit_visual = discord.ui.Button(
-            label="Editar visual",
-            style=discord.ButtonStyle.secondary,
-        )
+        edit_visual = discord.ui.Button(label="Visual", style=discord.ButtonStyle.secondary)
         edit_visual.callback = self._edit_visual
-        preview = discord.ui.Button(
-            label="Prévia",
+        edit_emojis = discord.ui.Button(label="Emojis", style=discord.ButtonStyle.secondary)
+        edit_emojis.callback = self._edit_emojis
+        edit_product_emojis = discord.ui.Button(
+            label="Emojis produtos",
             style=discord.ButtonStyle.secondary,
         )
+        edit_product_emojis.callback = self._edit_product_emojis
+        preview = discord.ui.Button(label="Prévia", style=discord.ButtonStyle.secondary)
         preview.callback = self._preview
-        add_action_row(self.container, edit_message, edit_visual, preview)
+        add_action_row(
+            self.container,
+            edit_message,
+            edit_visual,
+            edit_emojis,
+            edit_product_emojis,
+            preview,
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner_id:
@@ -216,15 +262,33 @@ class DeliveryAdminView(discord.ui.LayoutView):
         config = await _load_config(interaction.guild.id)
         await interaction.response.send_modal(DeliveryVisualModal(config))
 
+    async def _edit_emojis(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        config = await _load_config(interaction.guild.id)
+        await interaction.response.send_modal(DeliveryEmojiModal(config))
+
+    async def _edit_product_emojis(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        config = await _load_config(interaction.guild.id)
+        await interaction.response.send_modal(DeliveryProductEmojiModal(config))
+
     async def _preview(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
         config = await _load_config(interaction.guild.id)
         item = SimpleNamespace(
-            name_snapshot="Notifier",
+            name_snapshot="VIP",
             quantity=1,
-            unit_price=22,
-            metadata_json={"game_name": "BLOX FRUITS"},
+            unit_price=4.32,
+            metadata_json={
+                "game_name": "Dungeon Lootr › Morreti Gostoso",
+                "robux_amount": 120,
+                "discount_percent": "6",
+                "original_total": "4.32",
+                "discounted_total": "4.06",
+            },
         )
         title, lines, footer, accent, _ = render_delivery(
             config,
@@ -234,9 +298,9 @@ class DeliveryAdminView(discord.ui.LayoutView):
         )
         await interaction.response.send_message(
             view=CardLayout(
-                title=title,
-                lines=lines,
-                footer=footer,
+                title=None,
+                lines=([title] if title else []) + lines,
+                footer=footer or None,
                 accent_colour=accent,
             ),
             ephemeral=True,
