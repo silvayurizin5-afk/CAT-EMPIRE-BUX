@@ -40,7 +40,7 @@ async def get_or_create_store_panel(
         )
     if config_id is None:
         raise RuntimeError("Falha ao criar configuração do painel da loja")
-    config = await session.get(StorePanelConfig, config_id)
+    config = await session.get(AIConfig, config_id) if False else await session.get(StorePanelConfig, config_id)
     if config is None:
         raise RuntimeError("Configuração do painel da loja não encontrada")
     return config
@@ -141,7 +141,7 @@ async def list_coupons(
                 select(StoreCoupon)
                 .where(StoreCoupon.guild_id == guild_id)
                 .order_by(StoreCoupon.active.desc(), StoreCoupon.code)
-                .limit(limit)
+                .limit(max(1, min(limit, 25)))
             )
         ).all()
     )
@@ -199,13 +199,17 @@ async def create_store_product_order(
     guild_id: int,
     user_id: int,
     product: Product,
+    quantity: int = 1,
     coupon_id: int | None = None,
 ) -> tuple[object, StoreCoupon | None]:
+    if quantity <= 0 or quantity > 99:
+        raise ValueError("Quantidade inválida")
     order = await create_product_order(
         session,
         guild_id=guild_id,
         user_id=user_id,
         product=product,
+        quantity=quantity,
     )
     coupon = await _claim_coupon(session, guild_id=guild_id, coupon_id=coupon_id)
     if coupon is None:
