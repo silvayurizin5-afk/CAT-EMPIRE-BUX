@@ -19,6 +19,11 @@ ADMIN_ACTIONS = (
         "Configurar loja",
         "Painel, produtos, cupons, preços, estoques e publicação",
     ),
+    (
+        "ai",
+        "Configurar IA",
+        "Canais autorizados, suporte, sugestões e provedores",
+    ),
     ("embed_builder", "Criar mensagem visual", "Editor visual para mensagens do servidor"),
     ("feedback", "Configurar feedbacks", "Emoji, lembretes e permissões"),
     ("ticket_messages", "Mensagens dos tickets", "Editar textos automáticos dos pedidos"),
@@ -36,9 +41,7 @@ def build_admin_embed() -> discord.Embed:
     """Compatibilidade temporária com telas administrativas legadas."""
     return discord.Embed(
         title="NEXTBUY • Administração",
-        description=(
-            "Selecione o que deseja configurar. A IA é configurada separadamente com `/ia`."
-        ),
+        description="Selecione o que deseja configurar.",
         color=discord.Color.from_rgb(43, 45, 49),
     )
 
@@ -70,8 +73,8 @@ class CompactAdminPanelView(discord.ui.LayoutView):
             description="Selecione abaixo o que deseja configurar neste servidor.",
             lines=[
                 "- **Loja:** produtos, cupons, preços, estoques e publicação.",
+                "- **IA:** canais autorizados, suporte, sugestões e prioridade de provedores.",
                 "- **Automação:** tickets, feedbacks, termos e faixas.",
-                "- **IA:** use `/ia` para canais autorizados, suporte e sugestões.",
             ],
             footer="Painel privado • alterações valem para este servidor",
             timeout=900,
