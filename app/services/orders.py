@@ -53,6 +53,8 @@ async def create_product_order(
     metadata.setdefault("game_name", locked_product.game_name)
     metadata.setdefault("product_type", locked_product.product_type)
     metadata.setdefault("product_slug", locked_product.slug)
+    metadata.setdefault("product_emoji", locked_product.emoji)
+    metadata.setdefault("product_image_url", locked_product.image_url)
 
     session.add(
         OrderItem(
