@@ -4,6 +4,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.ai_models import AIConfig, DEFAULT_PROVIDER_ORDER
 
+LEGACY_DEFAULT_PROVIDER_ORDER = [
+    "openai",
+    "anthropic",
+    "gemini",
+    "xai",
+    "mistral",
+    "groq",
+    "openrouter",
+]
+
 
 async def get_or_create_ai_config(session: AsyncSession, guild_id: int) -> AIConfig:
     statement = (
@@ -20,6 +30,13 @@ async def get_or_create_ai_config(session: AsyncSession, guild_id: int) -> AICon
     config = await session.get(AIConfig, config_id)
     if config is None:
         raise RuntimeError("Configuração da IA não encontrada")
+
+    # Configurações criadas antes da ordem free-first ficaram persistidas no banco.
+    # Só migramos a ordem padrão antiga; uma ordem personalizada pelo administrador é preservada.
+    if list(config.provider_order or []) == LEGACY_DEFAULT_PROVIDER_ORDER:
+        config.provider_order = list(DEFAULT_PROVIDER_ORDER)
+        await session.flush()
+
     return config
 
 
