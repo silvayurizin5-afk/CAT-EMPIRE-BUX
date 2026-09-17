@@ -4,7 +4,7 @@ from types import MethodType
 import discord
 
 from app.bot.cogs import automation as base
-from app.bot.components_v2 import strip_generic_emoji
+from app.bot.components_v2 import CardLayout, strip_generic_emoji
 from app.services.ai_gateway import AIUnavailable, request_structured_ai
 
 GENERAL_AI_PROMPT = (
@@ -23,6 +23,39 @@ Regra adicional para perguntas gerais:
 )
 
 _ORIGINAL_HANDLE_AI = base.AutomationCog._handle_ai
+
+
+async def _safe_reply(
+    message: discord.Message,
+    *,
+    title: str,
+    lines: list[str],
+    footer: str | None = None,
+) -> None:
+    def build_view() -> CardLayout:
+        return CardLayout(
+            title=title,
+            lines=[message.author.mention, *lines],
+            footer=footer,
+            timeout=180,
+        )
+
+    allowed_mentions = discord.AllowedMentions(users=True, roles=False, everyone=False)
+    try:
+        await message.reply(
+            view=build_view(),
+            mention_author=False,
+            allowed_mentions=allowed_mentions,
+        )
+    except discord.HTTPException as exc:
+        # A IA pode terminar de processar depois que a mensagem original foi apagada.
+        # Nesse caso o Discord rejeita somente a referência; enviamos a resposta no canal.
+        if exc.code != 50035 or "message_reference" not in str(exc):
+            raise
+        await message.channel.send(
+            view=build_view(),
+            allowed_mentions=allowed_mentions,
+        )
 
 
 async def _interpret(
@@ -117,6 +150,7 @@ async def _handle_ai(
 
 
 async def setup(bot) -> None:
+    base._reply = _safe_reply
     cog = base.AutomationCog(bot)
     cog._interpret = MethodType(_interpret, cog)
     cog._support = MethodType(_support, cog)
