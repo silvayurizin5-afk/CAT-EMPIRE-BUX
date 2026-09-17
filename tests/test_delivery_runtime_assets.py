@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from app.bot.cogs.delivery_runtime import (
     _emoji_image_url,
+    _inline_emoji_from_asset,
     _normalize_emoji,
     _render_delivery,
 )
@@ -53,6 +54,15 @@ def test_discord_emoji_cdn_url_becomes_real_emoji_mention() -> None:
     animated_url = "https://cdn.discordapp.com/emojis/123456789012345678.gif"
     assert _normalize_emoji(static_url) == "<:emoji:123456789012345678>"
     assert _normalize_emoji(animated_url) == "<a:emoji:123456789012345678>"
+
+
+def test_discord_image_asset_can_be_rendered_inline_next_to_game_name() -> None:
+    image_url = "https://cdn.discordapp.com/emojis/123456789012345678.webp?size=2048"
+    assert _inline_emoji_from_asset(image_url) == "<:emoji:123456789012345678>"
+
+
+def test_normal_http_image_is_not_rendered_as_fake_inline_emoji() -> None:
+    assert _inline_emoji_from_asset("https://example.com/blox-fruits.png") == ""
 
 
 def test_http_game_icon_is_valid_image_fallback() -> None:
