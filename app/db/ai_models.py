@@ -5,13 +5,13 @@ from app.db.models import Base, TimestampMixin
 
 
 DEFAULT_PROVIDER_ORDER = [
+    "groq",
+    "gemini",
+    "openrouter",
     "openai",
     "anthropic",
-    "gemini",
     "xai",
     "mistral",
-    "groq",
-    "openrouter",
 ]
 
 
