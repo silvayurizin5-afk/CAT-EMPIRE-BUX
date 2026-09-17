@@ -1,5 +1,7 @@
 import discord
 
+from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
+from app.bot.emoji import select_option_emoji
 from app.bot.views.ticket_admin import FinalAdminPanelView
 from app.db.models import TermsDocument
 from app.db.session import SessionLocal
@@ -8,17 +10,23 @@ from app.services.catalog import upsert_terms
 from app.services.terms import list_terms, set_terms_active
 
 
+def _terms_lines(terms: TermsDocument) -> list[str]:
+    return [
+        terms.content[:4000],
+        f"**Código:** `{terms.code}`",
+        f"**Versão:** `{terms.version}`",
+        f"**Status:** `{'Ativo' if terms.active else 'Desativado'}`",
+        f"**Emoji:** {terms.emoji or '—'}",
+    ]
+
+
 def build_terms_admin_embed(terms: TermsDocument) -> discord.Embed:
-    embed = discord.Embed(
+    """Compatibilidade com telas antigas; a interface ativa usa Components V2."""
+    return discord.Embed(
         title=f"Termo • {terms.title}",
-        description=terms.content[:4000],
+        description="\n".join(_terms_lines(terms)),
+        color=discord.Color.from_rgb(43, 45, 49),
     )
-    embed.add_field(name="Código", value=f"`{terms.code}`")
-    embed.add_field(name="Versão", value=str(terms.version))
-    embed.add_field(name="Status", value="Ativo" if terms.active else "Desativado")
-    if terms.emoji:
-        embed.set_footer(text=f"Emoji: {terms.emoji}")
-    return embed
 
 
 class TermsEditModal(discord.ui.Modal):
@@ -57,10 +65,11 @@ class TermsEditModal(discord.ui.Modal):
             )
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             terms = await session.get(TermsDocument, self.terms_id)
             if terms is None or terms.guild_id != interaction.guild.id:
-                await interaction.response.send_message("Termo não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Termo não encontrado.")
                 return
             was_active = terms.active
             old_version = terms.version
@@ -88,10 +97,11 @@ class TermsEditModal(discord.ui.Modal):
                 },
             )
 
-        await interaction.response.send_message(
-            f"Termo atualizado para a versão **{updated.version}**. "
-            "Quem tinha aceitado a versão anterior precisará aceitar a nova antes da próxima compra.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content=(
+                f"Termo atualizado para a versão **{updated.version}**. "
+                "Quem aceitou a versão anterior precisará aceitar a nova antes da próxima compra."
+            )
         )
 
 
@@ -115,10 +125,11 @@ class TermsActionsView(discord.ui.View):
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             terms = await session.get(TermsDocument, self.terms_id)
             if terms is None or terms.guild_id != interaction.guild.id:
-                await interaction.response.send_message("Termo não encontrado.", ephemeral=True)
+                await interaction.edit_original_response(content="Termo não encontrado.", view=None)
                 return
             await set_terms_active(session, terms=terms, active=not terms.active)
             await write_audit_log(
@@ -130,11 +141,32 @@ class TermsActionsView(discord.ui.View):
                 target_id=str(terms.id),
                 details={"active": terms.active, "version": terms.version},
             )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=None,
-            embed=build_terms_admin_embed(terms),
-            view=TermsActionsView(terms.id),
+            embeds=[],
+            view=TermsActionsLayout(terms),
         )
+
+
+class TermsActionsLayout(discord.ui.LayoutView):
+    def __init__(self, terms: TermsDocument) -> None:
+        super().__init__(timeout=180)
+        card = CardLayout(
+            title=f"Termo • {terms.title}",
+            lines=_terms_lines(terms),
+            footer="NEXTBUY • Termos",
+            timeout=180,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+
+        legacy = TermsActionsView(terms.id)
+        buttons = list(legacy.children)
+        for item in buttons:
+            legacy.remove_item(item)
+        if buttons:
+            add_action_row(self.container, *buttons)
 
 
 class TermsManageSelect(discord.ui.Select):
@@ -146,7 +178,7 @@ class TermsManageSelect(discord.ui.Select):
                 description=(
                     f"v{item.version} • {'ativo' if item.active else 'desativado'} • {item.code}"
                 )[:100],
-                emoji=item.emoji or None,
+                emoji=select_option_emoji(item.emoji),
             )
             for item in terms[:25]
         ]
@@ -155,40 +187,50 @@ class TermsManageSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
+        await interaction.response.defer()
         terms_id = int(self.values[0])
         async with SessionLocal() as session:
             terms = await session.get(TermsDocument, terms_id)
         if terms is None or terms.guild_id != interaction.guild.id:
-            await interaction.response.edit_message(content="Termo não encontrado.", view=None)
+            await interaction.edit_original_response(content="Termo não encontrado.", view=None)
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=None,
-            embed=build_terms_admin_embed(terms),
-            view=TermsActionsView(terms.id),
+            embeds=[],
+            view=TermsActionsLayout(terms),
         )
 
 
-class TermsManagementView(discord.ui.View):
+class TermsManagementView(discord.ui.LayoutView):
     def __init__(self, terms: list[TermsDocument]) -> None:
         super().__init__(timeout=180)
-        self.add_item(TermsManageSelect(terms))
+        card = CardLayout(
+            title="Gerenciar termos",
+            description="Escolha um termo para editar, criar uma nova versão ou alterar o status.",
+            timeout=180,
+        )
+        self.container = card.container
+        card.remove_item(card.container)
+        self.add_item(self.container)
+        add_select_row(self.container, TermsManageSelect(terms))
 
 
 async def send_terms_management(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
+    await interaction.response.defer(ephemeral=True, thinking=True)
     async with SessionLocal() as session:
         terms = await list_terms(session, guild_id=interaction.guild.id)
     if not terms:
-        await interaction.response.send_message(
-            "Nenhum termo cadastrado. Use **Termos** primeiro.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content="Nenhum termo cadastrado. Use **Termos** primeiro.",
+            view=None,
         )
         return
-    await interaction.response.send_message(
-        "Escolha um termo para editar ou ativar/desativar:",
+    await interaction.edit_original_response(
+        content=None,
+        embeds=[],
         view=TermsManagementView(terms),
-        ephemeral=True,
     )
 
 
