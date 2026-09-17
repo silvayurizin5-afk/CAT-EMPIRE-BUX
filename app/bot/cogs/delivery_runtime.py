@@ -20,6 +20,11 @@ from app.services.delivery_settings import (
 )
 
 _CUSTOM_EMOJI_RE = re.compile(r"<(?P<animated>a?):[^:>]+:(?P<id>\d+)>")
+_DISCORD_EMOJI_URL_RE = re.compile(
+    r"^https?://(?:cdn|media)\.discordapp\.(?:com|net)/emojis/"
+    r"(?P<id>\d+)\.(?P<ext>gif|png|webp)(?:\?.*)?$",
+    re.IGNORECASE,
+)
 _DEFAULT_PRODUCT_TEMPLATES = {
     "**{product}**{game_part}{quantity_part}",
     (
@@ -60,6 +65,19 @@ def _delivery_item_lines(items) -> list[str]:
         game = f" • {game_name}" if game_name else ""
         lines.append(f"**{item.name_snapshot}**{game} × `{quantity}`")
     return lines
+
+
+def _normalize_emoji(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if _CUSTOM_EMOJI_RE.fullmatch(raw):
+        return raw
+    match = _DISCORD_EMOJI_URL_RE.fullmatch(raw)
+    if match is None:
+        return raw
+    prefix = "a" if match.group("ext").lower() == "gif" else ""
+    return f"<{prefix}:emoji:{match.group('id')}>"
 
 
 def _emoji_image_url(value: str | None) -> str | None:
@@ -112,23 +130,35 @@ async def _delivery_context(
         product = by_id.get(int(item.product_id)) if item.product_id else None
 
         if product is not None:
-            metadata.setdefault("product_emoji", product.emoji)
-            metadata.setdefault("product_image_url", product.image_url)
-            metadata.setdefault("game_name", product.game_name)
-            metadata.setdefault("product_type", product.product_type)
+            if not metadata.get("product_emoji") and product.emoji:
+                metadata["product_emoji"] = product.emoji
+            if not metadata.get("product_image_url") and product.image_url:
+                metadata["product_image_url"] = product.image_url
+            if not metadata.get("game_name") and product.game_name:
+                metadata["game_name"] = product.game_name
+            if not metadata.get("product_type") and product.product_type:
+                metadata["product_type"] = product.product_type
             if not item.image_url_snapshot and product.image_url:
                 item.image_url_snapshot = product.image_url
 
+        product_emoji = _normalize_emoji(str(metadata.get("product_emoji") or ""))
+        if product_emoji:
+            metadata["product_emoji"] = product_emoji
+            fallback_image = fallback_image or _emoji_image_url(product_emoji)
+
         game_name = str(metadata.get("game_name") or "").strip()
         if game_name:
-            game_icon = str(game_icons.get(normalize_text(game_name)) or "").strip()
-            if game_icon:
-                metadata.setdefault("game_emoji", game_icon)
-                fallback_image = fallback_image or _emoji_image_url(game_icon)
-
-        product_emoji = str(metadata.get("product_emoji") or "").strip()
-        if product_emoji:
-            fallback_image = fallback_image or _emoji_image_url(product_emoji)
+            configured_game_icon = str(
+                game_icons.get(normalize_text(game_name)) or ""
+            ).strip()
+            game_emoji = _normalize_emoji(
+                str(metadata.get("game_emoji") or configured_game_icon)
+            )
+            if game_emoji:
+                metadata["game_emoji"] = game_emoji
+                fallback_image = fallback_image or _emoji_image_url(
+                    configured_game_icon or game_emoji
+                )
 
         product_image = str(metadata.get("product_image_url") or "").strip()
         if product_image:
@@ -263,6 +293,7 @@ __all__ = [
     "_delivery_image",
     "_delivery_item_lines",
     "_emoji_image_url",
+    "_normalize_emoji",
     "_render_delivery",
     "publish_delivery",
 ]
