@@ -95,7 +95,7 @@ class DeliveryVisualModal(discord.ui.Modal, title="Visual da entrega"):
             default=str(config["accent_color"])[:7],
         )
         self.show_image = discord.ui.TextInput(
-            label="Mostrar imagem do produto? sim/não",
+            label="Usar imagem/emoji como ícone? sim/não",
             max_length=3,
             default="sim" if bool(config["show_image"]) else "não",
         )
@@ -108,7 +108,7 @@ class DeliveryVisualModal(discord.ui.Modal, title="Visual da entrega"):
         answer = str(self.show_image).strip().casefold()
         if answer not in {"sim", "nao", "não"}:
             await interaction.response.send_message(
-                "Em mostrar imagem, use apenas `sim` ou `não`.",
+                "Em usar imagem/emoji como ícone, use apenas `sim` ou `não`.",
                 ephemeral=True,
             )
             return
@@ -215,7 +215,10 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
             ],
-            footer="A imagem usa primeiro a foto congelada no pedido e depois a imagem atual do produto.",
+            footer=(
+                "A imagem não vira banner: quando for compatível, ela é usada como ícone "
+                "inline ao lado do nome do jogo."
+            ),
             timeout=900,
         )
         self.container = card.container
