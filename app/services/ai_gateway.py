@@ -231,9 +231,22 @@ async def request_structured_ai(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                 )
-                return _extract_json(raw), provider.name
+                parsed = _extract_json(raw)
+                logger.info("IA respondeu usando %s (%s)", provider.name, provider.model)
+                return parsed, provider.name
+            except httpx.HTTPStatusError as exc:
+                logger.warning(
+                    "Falha no provedor de IA %s: HTTP %s",
+                    provider.name,
+                    exc.response.status_code,
+                )
+                continue
             except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                logger.warning("Falha no provedor de IA %s: %s", provider.name, type(exc).__name__)
+                logger.warning(
+                    "Falha no provedor de IA %s: %s",
+                    provider.name,
+                    type(exc).__name__,
+                )
                 continue
 
     raise AIUnavailable("Todos os provedores de IA configurados falharam")
