@@ -12,6 +12,7 @@ from app.bot.workflows.feedback_permissions import (
 )
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.services.ai_gateway import available_providers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,6 +71,19 @@ bot = NextBuyBot()
 @bot.event
 async def on_ready() -> None:
     logger.info("NEXTBUY online como %s", bot.user)
+
+    providers = available_providers()
+    if providers:
+        logger.info(
+            "IA pronta com provedores: %s",
+            " > ".join(f"{provider.name} ({provider.model})" for provider in providers),
+        )
+    else:
+        logger.warning(
+            "IA sem provedor disponível. Configure GROQ_API_KEY, GEMINI_API_KEY ou "
+            "OPENROUTER_API_KEY no .env."
+        )
+
     if bot._feedback_permissions_synced:
         return
     for guild in bot.guilds:
