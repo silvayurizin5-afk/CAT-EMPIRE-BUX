@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # IA: todos os provedores são opcionais. Um provedor só entra no fallback
     # quando chave e modelo estiverem configurados.
-    ai_provider_order: str = "openai,anthropic,gemini,xai,mistral,groq,openrouter"
+    ai_provider_order: str = "groq,gemini,openrouter,openai,anthropic,xai,mistral"
     ai_timeout_seconds: float = 18.0
 
     openai_api_key: SecretStr = SecretStr("")
@@ -25,15 +25,15 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_model: str = ""
     gemini_api_key: SecretStr = SecretStr("")
-    gemini_model: str = ""
+    gemini_model: str = "gemini-2.5-flash"
     xai_api_key: SecretStr = SecretStr("")
     xai_model: str = ""
     mistral_api_key: SecretStr = SecretStr("")
     mistral_model: str = ""
     groq_api_key: SecretStr = SecretStr("")
-    groq_model: str = ""
+    groq_model: str = "openai/gpt-oss-120b"
     openrouter_api_key: SecretStr = SecretStr("")
-    openrouter_model: str = ""
+    openrouter_model: str = "openrouter/free"
 
     # Integrações antigas mantidas somente para compatibilidade de histórico/webhooks legados.
     stripe_secret_key: SecretStr = SecretStr("")
