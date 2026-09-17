@@ -1,4 +1,5 @@
 import asyncio
+import re
 from decimal import Decimal
 from uuid import UUID
 
@@ -27,10 +28,37 @@ from app.services.store_panel import (
 from app.services.users import get_or_create_user
 
 PIX_EMOJI = "<:PIX:1549632822388592663>"
+_EMOJI_CDN_RE = re.compile(
+    r"^https?://(?:cdn|media)\.discordapp\.(?:com|net)/emojis/(\d+)\.(gif|png|webp)(?:\?.*)?$",
+    re.IGNORECASE,
+)
 
 
 def _accent(config: StorePanelConfig) -> discord.Colour:
     return discord.Colour(config.color)
+
+
+def _emoji_from_url(value: str | None) -> str:
+    match = _EMOJI_CDN_RE.match((value or "").strip())
+    if match is None:
+        return ""
+    emoji_id, extension = match.groups()
+    prefix = "a" if extension.lower() == "gif" else ""
+    return f"<{prefix}:emoji:{emoji_id}>"
+
+
+def _product_emoji(product: Product) -> str:
+    raw = (product.emoji or "").strip()
+    if raw.startswith("<:") or raw.startswith("<a:"):
+        return raw
+    return _emoji_from_url(raw) or _emoji_from_url(product.image_url)
+
+
+def _product_image_url(product: Product) -> str | None:
+    value = (product.image_url or "").strip()
+    if not value or _EMOJI_CDN_RE.match(value):
+        return None
+    return value
 
 
 def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> discord.Embed:
@@ -52,7 +80,7 @@ def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> dis
 
 
 def _product_title(config: StorePanelConfig, product: Product) -> str:
-    emoji = (product.emoji or "").strip()
+    emoji = _product_emoji(product)
     template = config.checkout_title_template or "{emoji} {product}"
     try:
         title = template.format(emoji=emoji, product=product.name, game=product.game_name or "")
@@ -75,6 +103,7 @@ def build_product_checkout_card(
     product: Product,
     *,
     owner_id: int,
+    quantity: int = 1,
     coupon_id: int | None = None,
     coupon_code: str | None = None,
     discount_percent: Decimal | None = None,
@@ -83,6 +112,7 @@ def build_product_checkout_card(
         config=config,
         product=product,
         owner_id=owner_id,
+        quantity=quantity,
         coupon_id=coupon_id,
         coupon_code=coupon_code,
         discount_percent=discount_percent,
@@ -97,10 +127,11 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
         max_length=40,
     )
 
-    def __init__(self, *, product_id: int, owner_id: int) -> None:
+    def __init__(self, *, product_id: int, owner_id: int, quantity: int) -> None:
         super().__init__()
         self.product_id = product_id
         self.owner_id = owner_id
+        self.quantity = quantity
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or interaction.user.id != self.owner_id:
@@ -128,6 +159,7 @@ class CouponModal(discord.ui.Modal, title="Adicionar cupom"):
                 config,
                 product,
                 owner_id=self.owner_id,
+                quantity=self.quantity,
                 coupon_id=coupon.id,
                 coupon_code=coupon.code,
                 discount_percent=coupon.discount_percent,
@@ -142,14 +174,19 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
         config: StorePanelConfig,
         product: Product,
         owner_id: int,
+        quantity: int = 1,
         coupon_id: int | None = None,
         coupon_code: str | None = None,
         discount_percent: Decimal | None = None,
     ) -> None:
         super().__init__(timeout=300)
+        max_quantity = 99 if product.stock_quantity is None else max(1, min(99, product.stock_quantity))
         self.product_id = product.id
         self.owner_id = owner_id
+        self.quantity = max(1, min(int(quantity), max_quantity))
         self.coupon_id = coupon_id
+        self.coupon_code = coupon_code
+        self.discount_percent = discount_percent
         self._lock = asyncio.Lock()
         self._order_id: UUID | None = None
 
@@ -159,20 +196,24 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
         if product.description:
             lines.append(product.description)
 
+        lines.append(f"**Quantidade:** `{self.quantity}`")
         if product.price_credits is None:
             lines.append(f"**{PIX_EMOJI} Preço:** `Indisponível`")
         else:
-            original = money(product.price_credits)
+            unit = money(product.price_credits)
+            original = money(unit * self.quantity)
+            if self.quantity > 1:
+                lines.append(f"**Valor unitário:** `{format_brl(unit)}`")
             if coupon_code and discount_percent is not None:
                 final = discounted_total(original, discount_percent)
                 lines.append(
-                    f"**{PIX_EMOJI} Preço:** ~~{format_brl(original)}~~  **`{format_brl(final)}`**"
+                    f"**{PIX_EMOJI} Total:** ~~{format_brl(original)}~~  **`{format_brl(final)}`**"
                 )
                 lines.append(
                     f"**Cupom:** `{coupon_code}` • **{format_percent(discount_percent)} de desconto**"
                 )
             else:
-                lines.append(f"**{PIX_EMOJI} Preço:** `{format_brl(original)}`")
+                lines.append(f"**{PIX_EMOJI} Total:** `{format_brl(original)}`")
 
         card = CardLayout(
             title=_product_title(config, product),
@@ -180,13 +221,28 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
             lines=lines,
             footer=config.footer_text or None,
             accent_colour=_accent(config),
-            image_url=product.image_url,
+            image_url=_product_image_url(product),
             timeout=300,
         )
         self.container = card.container
         card.remove_item(card.container)
         self.add_item(self.container)
 
+        decrease = discord.ui.Button(
+            label="−",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.quantity <= 1,
+        )
+        quantity_label = discord.ui.Button(
+            label=f"Qtd: {self.quantity}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        increase = discord.ui.Button(
+            label="+",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.quantity >= max_quantity,
+        )
         buy = discord.ui.Button(
             label=(config.buy_button_label or "Comprar")[:80],
             style=discord.ButtonStyle.success,
@@ -197,9 +253,11 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
             style=discord.ButtonStyle.secondary,
             custom_id=f"nextbuy:store:coupon:{product.id}:{owner_id}",
         )
+        decrease.callback = self._decrease
+        increase.callback = self._increase
         buy.callback = self._confirm
         coupon.callback = self._coupon
-        add_action_row(self.container, buy, coupon)
+        add_action_row(self.container, decrease, quantity_label, increase, buy, coupon)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner_id:
@@ -207,9 +265,44 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
         await interaction.response.send_message("Essa compra pertence a outro cliente.", ephemeral=True)
         return False
 
+    async def _refresh_quantity(self, interaction: discord.Interaction, delta: int) -> None:
+        if interaction.guild is None:
+            return
+        await interaction.response.defer()
+        async with SessionLocal() as session, session.begin():
+            product = await session.get(Product, self.product_id)
+            config = await get_or_create_store_panel(session, interaction.guild.id)
+        if product is None or product.guild_id != interaction.guild.id or not product.active:
+            await interaction.edit_original_response(content="Produto indisponível.", view=None)
+            return
+        max_quantity = 99 if product.stock_quantity is None else max(1, min(99, product.stock_quantity))
+        quantity = max(1, min(self.quantity + delta, max_quantity))
+        await interaction.edit_original_response(
+            content=None,
+            view=build_product_checkout_card(
+                config,
+                product,
+                owner_id=self.owner_id,
+                quantity=quantity,
+                coupon_id=self.coupon_id,
+                coupon_code=self.coupon_code,
+                discount_percent=self.discount_percent,
+            ),
+        )
+
+    async def _decrease(self, interaction: discord.Interaction) -> None:
+        await self._refresh_quantity(interaction, -1)
+
+    async def _increase(self, interaction: discord.Interaction) -> None:
+        await self._refresh_quantity(interaction, 1)
+
     async def _coupon(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(
-            CouponModal(product_id=self.product_id, owner_id=self.owner_id)
+            CouponModal(
+                product_id=self.product_id,
+                owner_id=self.owner_id,
+                quantity=self.quantity,
+            )
         )
 
     async def _confirm(self, interaction: discord.Interaction) -> None:
@@ -251,12 +344,13 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
                         guild_id=interaction.guild.id,
                         user_id=user.id,
                         product=product,
+                        quantity=self.quantity,
                         coupon_id=self.coupon_id,
                     )
                 self._order_id = order.id
             except OutOfStockError:
                 await interaction.edit_original_response(
-                    content="Esse produto ficou sem estoque.", view=None
+                    content="Não há estoque suficiente para essa quantidade.", view=None
                 )
                 return
             except ValueError as exc:
@@ -302,9 +396,10 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
             return
 
         coupon_text = f" • cupom `{coupon.code}`" if coupon is not None else ""
+        quantity_text = f"{self.quantity}× " if self.quantity > 1 else ""
         await interaction.edit_original_response(
             content=(
-                f"**{product_name}** • **{format_brl(order.total_credits)}**{coupon_text}. "
+                f"**{quantity_text}{product_name}** • **{format_brl(order.total_credits)}**{coupon_text}. "
                 f"O QR Code e o PIX Copia e Cola estão em {ticket.mention}. "
                 "Depois de pagar, aguarde a confirmação da equipe."
             ),
