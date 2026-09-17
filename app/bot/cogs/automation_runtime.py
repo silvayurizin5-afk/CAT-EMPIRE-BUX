@@ -100,13 +100,12 @@ def _quick_store_answer(message: discord.Message, products) -> dict[str, object]
             "emoji_name": None,
         }
 
-    if "cupom" in normalized and (
-        normalized == "cupom"
+    if ("cupom" in normalized or "cupons" in normalized) and (
+        normalized in {"cupom", "cupons"}
         or "como" in normalized
         or "funciona" in normalized
         or "usar" in normalized
         or "aplicar" in normalized
-        or "cupons" in normalized
     ):
         return {
             "intent": "store_question",
