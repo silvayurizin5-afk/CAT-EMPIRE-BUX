@@ -40,7 +40,7 @@ async def get_or_create_store_panel(
         )
     if config_id is None:
         raise RuntimeError("Falha ao criar configuração do painel da loja")
-    config = await session.get(AIConfig, config_id) if False else await session.get(StorePanelConfig, config_id)
+    config = await session.get(StorePanelConfig, config_id)
     if config is None:
         raise RuntimeError("Configuração do painel da loja não encontrada")
     return config
