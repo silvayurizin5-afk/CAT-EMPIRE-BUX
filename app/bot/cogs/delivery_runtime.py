@@ -1,14 +1,18 @@
 import discord
+from sqlalchemy import select
 
 from app.bot.components_v2 import CardLayout
 from app.bot.workflows import tickets
 from app.db.models import Order
 from app.db.session import SessionLocal
-
-VERIFY_EMOJI = "<a:verify:1550043693510037546>"
-ARROW_EMOJI = "<a:s_ASETA2_:1550044035522109511>"
-MEMBER_EMOJI = "<:member:1550043925283344458>"
-BOX_EMOJI = "<:CaixaStorm:1550043608952999996>"
+from app.db.store_models import StorePanelConfig
+from app.services.delivery_settings import (
+    ARROW_EMOJI,
+    BOX_EMOJI,
+    MEMBER_EMOJI,
+    VERIFY_EMOJI,
+    render_delivery,
+)
 
 _GAME_PRODUCT_TYPES = {"item", "gamepass", "game_pass", "gift"}
 
@@ -18,7 +22,7 @@ def _product_type(item) -> str:
 
 
 def _delivery_image(items) -> str | None:
-    """Itens/Game Pass usam a imagem salva no próprio pedido, vinda do painel da loja."""
+    """Compatibilidade para testes: retorna a foto congelada de item/Game Pass quando existir."""
     for item in items:
         if _product_type(item) in _GAME_PRODUCT_TYPES and item.image_url_snapshot:
             return item.image_url_snapshot
@@ -26,17 +30,25 @@ def _delivery_image(items) -> str | None:
 
 
 def _delivery_item_lines(items) -> list[str]:
+    """Formato padrão sem seta; o runtime real usa o template configurado no admin."""
     if not items:
-        return [f"{ARROW_EMOJI} **Pedido sem itens cadastrados**"]
-
+        return ["Pedido sem itens cadastrados"]
     lines: list[str] = []
     for item in items:
         quantity = int(item.quantity or 1)
         suffix = f" × `{quantity}`" if quantity > 1 else ""
         game_name = str((item.metadata_json or {}).get("game_name") or "").strip()
         game = f" • {game_name}" if game_name else ""
-        lines.append(f"{ARROW_EMOJI} **{item.name_snapshot}**{game}{suffix}")
+        lines.append(f"**{item.name_snapshot}**{game}{suffix}")
     return lines
+
+
+async def _delivery_config(guild_id: int) -> dict[str, object] | None:
+    async with SessionLocal() as session:
+        panel = await session.scalar(
+            select(StorePanelConfig).where(StorePanelConfig.guild_id == guild_id)
+        )
+        return dict(panel.delivery_config or {}) if panel is not None else None
 
 
 async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
@@ -53,19 +65,25 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
 
     member = guild.get_member(user.discord_user_id)
     mention = member.mention if member else f"<@{user.discord_user_id}>"
-    image_url = _delivery_image(items)
+    raw_config = await _delivery_config(guild.id)
+    title, lines, footer, accent, show_image = render_delivery(
+        raw_config,
+        order_id=order.id,
+        client_mention=mention,
+        items=items,
+    )
+    image_url = (
+        await tickets.resolve_order_image(items, game_products_only=True)
+        if show_image
+        else None
+    )
 
     view = CardLayout(
-        title=f"{VERIFY_EMOJI} {ARROW_EMOJI} Entrega Realizada",
-        lines=[
-            f"{MEMBER_EMOJI} **Cliente:** {mention}",
-            f"{VERIFY_EMOJI} **Status:** Pedido entregue com sucesso",
-            f"### {BOX_EMOJI} {ARROW_EMOJI} Produto(s):",
-            *_delivery_item_lines(items),
-        ],
-        footer=f"NEXTBUY • Pedido #{str(order.id)[:8]}",
+        title=title,
+        lines=lines,
+        footer=footer,
         image_url=image_url,
-        accent_colour=discord.Colour.green(),
+        accent_colour=accent,
         timeout=None,
     )
     message = await channel.send(
@@ -83,3 +101,14 @@ async def setup(bot) -> None:
     # TicketStaffView resolve esse nome no módulo em tempo de execução; substituir aqui
     # mantém os views persistentes existentes compatíveis sem duplicar o fluxo de tickets.
     tickets.publish_delivery = publish_delivery
+
+
+__all__ = [
+    "ARROW_EMOJI",
+    "BOX_EMOJI",
+    "MEMBER_EMOJI",
+    "VERIFY_EMOJI",
+    "_delivery_image",
+    "_delivery_item_lines",
+    "publish_delivery",
+]
