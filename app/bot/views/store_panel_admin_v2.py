@@ -237,18 +237,18 @@ class StorePanelAdminViewV2(StorePanelAdminView):
 async def send_store_panel_admin(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
-    await interaction.response.defer()
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, interaction.guild.id)
         products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
         embed = build_store_panel_embed(config, len(products))
-    await interaction.edit_original_response(
+    await interaction.response.send_message(
         content=(
             "Configure toda a loja por este seletor. A prévia administrativa abaixo mostra o "
             "conteúdo; a publicação usa Components V2."
         ),
         embed=embed,
         view=StorePanelAdminViewV2(owner_id=interaction.user.id),
+        ephemeral=True,
     )
 
 
