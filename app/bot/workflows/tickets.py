@@ -247,36 +247,14 @@ async def open_order_ticket(
 
 
 async def publish_delivery(guild: discord.Guild, *, order_id: UUID) -> None:
-    loaded = await _load_order(order_id)
-    if loaded is None:
-        return
-    order, user, items, config = loaded
-    if config is None or not config.deliveries_channel_id or order.delivery_message_id:
-        return
-    channel = guild.get_channel(config.deliveries_channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        return
+    """Publica sempre pelo layout V2 especializado de entrega.
 
-    member = guild.get_member(user.discord_user_id)
-    product_name = _order_name(items)
-    image_url = await resolve_order_image(items)
-    view = CardLayout(
-        title="Entrega realizada",
-        description=f"**{product_name}**",
-        lines=[
-            f"**Cliente:** {member.mention if member else f'<@{user.discord_user_id}>'}",
-            *_item_lines(items),
-            "**Status:** `Entregue`",
-        ],
-        footer="NEXTBUY • Entrega",
-        image_url=image_url,
-        timeout=None,
-    )
-    message = await channel.send(view=view)
-    async with SessionLocal() as session, session.begin():
-        db_order = await session.get(Order, order.id)
-        if db_order is not None:
-            db_order.delivery_message_id = message.id
+    Import tardio evita ciclo de importação e garante que nenhum caminho legado volte a
+    transformar imagem/emoji do produto em banner.
+    """
+    from app.bot.cogs.delivery_runtime import publish_delivery as publish_delivery_runtime
+
+    await publish_delivery_runtime(guild, order_id=order_id)
 
 
 class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
