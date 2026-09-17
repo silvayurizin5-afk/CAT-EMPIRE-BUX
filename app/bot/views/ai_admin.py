@@ -155,7 +155,7 @@ class AIAdminView(discord.ui.LayoutView):
         )
         toggle.callback = self._toggle
         prioritize.callback = self._prioritize_free
-        refresh.callback = self._refresh
+        refresh.callback = self._refresh_status
         add_action_row(self.container, toggle, prioritize, refresh)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -189,7 +189,7 @@ class AIAdminView(discord.ui.LayoutView):
             view=await build_ai_admin_view(interaction.guild, owner_id=self.owner_id)
         )
 
-    async def _refresh(self, interaction: discord.Interaction) -> None:
+    async def _refresh_status(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
         await interaction.response.defer()
