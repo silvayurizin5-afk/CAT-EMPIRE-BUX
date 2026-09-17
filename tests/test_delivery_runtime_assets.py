@@ -1,6 +1,10 @@
 from decimal import Decimal
 
-from app.bot.cogs.delivery_runtime import _emoji_image_url, _render_delivery
+from app.bot.cogs.delivery_runtime import (
+    _emoji_image_url,
+    _normalize_emoji,
+    _render_delivery,
+)
 from app.db.models import OrderItem
 from app.services.delivery_settings import BOX_EMOJI
 
@@ -42,6 +46,13 @@ def test_custom_emoji_can_be_used_as_image_fallback() -> None:
         "https://cdn.discordapp.com/emojis/123456789012345678.gif"
         "?size=512&quality=lossless"
     )
+
+
+def test_discord_emoji_cdn_url_becomes_real_emoji_mention() -> None:
+    static_url = "https://cdn.discordapp.com/emojis/123456789012345678.png"
+    animated_url = "https://cdn.discordapp.com/emojis/123456789012345678.gif"
+    assert _normalize_emoji(static_url) == "<:emoji:123456789012345678>"
+    assert _normalize_emoji(animated_url) == "<a:emoji:123456789012345678>"
 
 
 def test_http_game_icon_is_valid_image_fallback() -> None:
