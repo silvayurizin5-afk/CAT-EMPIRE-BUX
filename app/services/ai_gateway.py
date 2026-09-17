@@ -11,6 +11,12 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MODELS = {
+    "groq": "openai/gpt-oss-120b",
+    "gemini": "gemini-2.5-flash",
+    "openrouter": "openrouter/free",
+}
+
 
 @dataclass(slots=True, frozen=True)
 class AIProvider:
@@ -30,7 +36,7 @@ def _provider(name: str) -> AIProvider | None:
         return None
     secret = getattr(settings, key_attr)
     api_key = secret.get_secret_value().strip()
-    model = str(getattr(settings, model_attr)).strip()
+    model = str(getattr(settings, model_attr)).strip() or DEFAULT_MODELS.get(name, "")
     if not api_key or not model:
         return None
     return AIProvider(name=name, api_key=api_key, model=model)
