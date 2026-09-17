@@ -323,12 +323,13 @@ class StarSelect(discord.ui.Select):
 
 
 class FeedbackPromptView(discord.ui.LayoutView):
-    def __init__(self, order_id: UUID) -> None:
+    def __init__(self, order_id: UUID, *, user_mention: str | None = None) -> None:
         super().__init__(timeout=300)
         self.order_id = order_id
         card = CardLayout(
             title="Avaliar compra",
             description="Como foi sua experiência com a NEXTBUY?",
+            lines=[user_mention] if user_mention else [],
             timeout=300,
         )
         self.container = card.container
@@ -429,8 +430,10 @@ class TicketStaffView(discord.ui.View):
         await interaction.edit_original_response(content="Entrega registrada.")
         if isinstance(interaction.channel, discord.TextChannel) and user is not None:
             await interaction.channel.send(
-                content=f"<@{user.discord_user_id}>",
-                view=FeedbackPromptView(self.order_id),
+                view=FeedbackPromptView(
+                    self.order_id,
+                    user_mention=f"<@{user.discord_user_id}>",
+                ),
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
 
