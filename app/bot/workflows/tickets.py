@@ -9,11 +9,11 @@ from sqlalchemy import select
 from app.bot.checks import can_deliver, can_support
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.workflows.transcripts import render_channel_transcript
-from app.db.models import GuildConfig, Order, OrderItem, User
+from app.db.models import GuildConfig, Order, OrderItem, Product, User
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
 from app.services.calculator import format_brl
-from app.services.feedback import schedule_feedback_reminder, submit_feedback
+from app.services.feedback import submit_feedback
 from app.services.feedback_cards import render_feedback_card
 from app.services.orders import mark_order_delivered
 
@@ -41,6 +41,49 @@ async def _load_order(order_id: UUID):
             select(GuildConfig).where(GuildConfig.guild_id == order.guild_id)
         )
         return order, user, items, config
+
+
+async def resolve_order_image(
+    items: list[OrderItem],
+    *,
+    game_products_only: bool = False,
+) -> str | None:
+    """Usa primeiro a foto congelada no pedido e, para pedidos antigos, cai na foto atual do produto."""
+    game_types = {"item", "gamepass", "game_pass", "gift"}
+    candidate_ids: list[int] = []
+    for item in items:
+        metadata = dict(item.metadata_json or {})
+        product_type = str(metadata.get("product_type") or "").strip().lower().replace(" ", "_")
+        if game_products_only and product_type not in game_types:
+            continue
+        if item.image_url_snapshot:
+            return item.image_url_snapshot
+        if item.product_id:
+            candidate_ids.append(int(item.product_id))
+
+    if not candidate_ids:
+        return None
+    async with SessionLocal() as session:
+        products = list(
+            (
+                await session.scalars(
+                    select(Product).where(Product.id.in_(candidate_ids)).order_by(Product.id)
+                )
+            ).all()
+        )
+    by_id = {product.id: product for product in products}
+    for item in items:
+        if not item.product_id:
+            continue
+        product = by_id.get(int(item.product_id))
+        if product is None:
+            continue
+        product_type = str(product.product_type or "").strip().lower().replace(" ", "_")
+        if game_products_only and product_type not in game_types:
+            continue
+        if product.image_url:
+            return product.image_url
+    return None
 
 
 def _order_name(items: list[OrderItem]) -> str:
@@ -189,7 +232,7 @@ async def open_order_ticket(
         f"**Total:** `{format_brl(order.total_credits)}`",
         "**Status:** `Confirmado`",
     ]
-    image_url = items[0].image_url_snapshot if items else None
+    image_url = await resolve_order_image(items)
     await channel.send(
         view=TicketStaffLayout(
             order.id,
@@ -216,6 +259,7 @@ async def publish_delivery(guild: discord.Guild, *, order_id: UUID) -> None:
 
     member = guild.get_member(user.discord_user_id)
     product_name = _order_name(items)
+    image_url = await resolve_order_image(items)
     view = CardLayout(
         title="Entrega realizada",
         description=f"**{product_name}**",
@@ -225,7 +269,7 @@ async def publish_delivery(guild: discord.Guild, *, order_id: UUID) -> None:
             "**Status:** `Entregue`",
         ],
         footer="NEXTBUY • Entrega",
-        image_url=items[0].image_url_snapshot if items else None,
+        image_url=image_url,
         timeout=None,
     )
     message = await channel.send(view=view)
@@ -337,19 +381,6 @@ class FeedbackPromptView(discord.ui.LayoutView):
         self.add_item(self.container)
         add_select_row(self.container, StarSelect(order_id))
 
-        later = discord.ui.Button(
-            label="Avaliar mais tarde",
-            style=discord.ButtonStyle.secondary,
-        )
-        later.callback = self._later
-        add_action_row(self.container, later)
-
-    async def _later(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            "Beleza. Se continuar pendente, eu te lembro no canal de feedbacks.",
-            ephemeral=True,
-        )
-
 
 class TicketStaffView(discord.ui.View):
     def __init__(self, order_id: UUID) -> None:
@@ -407,11 +438,6 @@ class TicketStaffView(discord.ui.View):
                 select(Order.status).where(Order.id == self.order_id).with_for_update()
             )
             order = await mark_order_delivered(session, order_id=self.order_id)
-            config = await session.scalar(
-                select(GuildConfig).where(GuildConfig.guild_id == interaction.guild.id)
-            )
-            delay = config.feedback_reminder_minutes if config else 5
-            await schedule_feedback_reminder(session, order=order, delay_minutes=delay)
             user = await session.get(User, order.user_id)
             if before != "delivered":
                 await write_audit_log(
