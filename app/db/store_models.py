@@ -53,6 +53,9 @@ class StorePanelConfig(Base, TimestampMixin):
     coupon_button_label: Mapped[str] = mapped_column(
         String(80), default="Adicionar cupom", server_default="Adicionar cupom"
     )
+    # Configuração livre da mensagem pública de entrega. Mantida em JSON para permitir
+    # evoluir templates/visual sem criar uma coluna para cada detalhe visual.
+    delivery_config: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     # Campos legados mantidos apenas para compatibilidade com registros antigos.
     topup_label: Mapped[str] = mapped_column(
         String(80), default="Adicionar créditos", server_default="Adicionar créditos"
