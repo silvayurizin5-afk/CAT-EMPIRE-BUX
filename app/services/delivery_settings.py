@@ -5,26 +5,41 @@ from typing import Any
 
 from app.services.calculator import format_brl
 
-DELIVERY_EMOJI = "<:EntregaRealizada:1453310348542087325>"
-ARROW_EMOJI = "<a:68523animatedarrowgreen:1441172995795193917>"
-USER_EMOJI = "<:user:1453310405416849460>"
-SEPARATOR_EMOJI = "<:emoji_4:1436151599268630568>"
-VERIFIED_EMOJI = "<:verificado:1453310464770707489>"
-ORDER_EMOJI = "<:PedidoSolicitado:1453309996199841812>"
-GAME_EMOJI = "<:oi:1548603672030740510>"
-PRODUCT_EMOJI = "<:oi:1544867740517670933>"
-DISCOUNT_EMOJI = "<:oi:1538473235635503254>"
+# Emojis enviados explicitamente pelo usuário para o servidor NEXTBUY.
+VERIFY_EMOJI = "<a:verify:1550043693510037546>"
+ARROW_EMOJI = "<a:s_ASETA2_:1550044035522109511>"
+MEMBER_EMOJI = "<:member:1550043925283344458>"
+BOX_EMOJI = "<:CaixaStorm:1550043608952999996>"
 
-# Aliases mantidos para compatibilidade com imports/configurações antigas.
-VERIFY_EMOJI = DELIVERY_EMOJI
-MEMBER_EMOJI = USER_EMOJI
-BOX_EMOJI = ORDER_EMOJI
+# Aliases usados pelos templates novos/antigos. Todos apontam somente para os quatro emojis acima;
+# nenhum ID da mensagem de referência externa é utilizado no padrão da loja.
+DELIVERY_EMOJI = VERIFY_EMOJI
+USER_EMOJI = MEMBER_EMOJI
+SEPARATOR_EMOJI = ""
+VERIFIED_EMOJI = VERIFY_EMOJI
+ORDER_EMOJI = BOX_EMOJI
+GAME_EMOJI = BOX_EMOJI
+PRODUCT_EMOJI = BOX_EMOJI
+DISCOUNT_EMOJI = VERIFY_EMOJI
+
+_FOREIGN_REFERENCE_EMOJIS = {
+    "<:EntregaRealizada:1453310348542087325>",
+    "<a:68523animatedarrowgreen:1441172995795193917>",
+    "<:user:1453310405416849460>",
+    "<:emoji_4:1436151599268630568>",
+    "<:verificado:1453310464770707489>",
+    "<:PedidoSolicitado:1453309996199841812>",
+    "<:oi:1548603672030740510>",
+    "<:oi:1544867740517670933>",
+    "<:oi:1538473235635503254>",
+}
 
 _LEGACY_DEFAULTS: dict[str, set[str]] = {
     "title_template": {
         "{verify} Entrega Realizada",
         "{verify} {arrow} Entrega Realizada",
         "{verify}{arrow}Entrega Realizada",
+        "# {delivery}{arrow}Entrega Realizada",
     },
     "body_template": {
         (
@@ -33,9 +48,20 @@ _LEGACY_DEFAULTS: dict[str, set[str]] = {
             "### {box} Produto(s):\n"
             "{products}"
         ),
+        (
+            "- **{user}{separator}Cliente:** {client}\n"
+            "- **{verified}{separator}Status: Pedido entregue com sucesso**\n"
+            "# {order_icon}{arrow}Produto(s):\n\n"
+            "{products}"
+        ),
     },
     "product_template": {
         "**{product}**{game_part}{quantity_part}",
+        (
+            "> **{game_emoji} {game_or_product}**\n"
+            "**• {product_emoji} {product} {quantity}× · {line_total}{robux_part}**\n"
+            "{discount_line}"
+        ),
     },
     "footer_template": {
         "NEXTBUY • Pedido #{order_short}",
@@ -43,34 +69,33 @@ _LEGACY_DEFAULTS: dict[str, set[str]] = {
 }
 
 DEFAULT_DELIVERY_CONFIG: dict[str, object] = {
-    "title_template": "# {delivery}{arrow}Entrega Realizada",
+    "title_template": "# {verify}{arrow}Entrega Realizada",
     "body_template": (
-        "- **{user}{separator}Cliente:** {client}\n"
-        "- **{verified}{separator}Status: Pedido entregue com sucesso**\n"
-        "# {order_icon}{arrow}Produto(s):\n\n"
+        "- **{member}Cliente:** {client}\n"
+        "- **{verify}Status: Pedido entregue com sucesso**\n"
+        "# {box}{arrow}Produto(s):\n\n"
         "{products}"
     ),
     "product_template": (
-        "> **{game_emoji} {game_or_product}**\n"
-        "**• {product_emoji} {product} {quantity}× · {line_total}{robux_part}**\n"
+        "> **{box} {game_or_product}**\n"
+        "**• {box} {product} {quantity}× · {line_total}{robux_part}**\n"
         "{discount_line}"
     ),
     "footer_template": "",
     "accent_color": "#23A55A",
     "show_image": True,
-    "delivery_emoji": DELIVERY_EMOJI,
+    "delivery_emoji": VERIFY_EMOJI,
     "arrow_emoji": ARROW_EMOJI,
-    "user_emoji": USER_EMOJI,
-    "separator_emoji": SEPARATOR_EMOJI,
-    "verified_emoji": VERIFIED_EMOJI,
-    "order_emoji": ORDER_EMOJI,
-    "game_emoji": GAME_EMOJI,
-    "product_emoji": PRODUCT_EMOJI,
-    "discount_emoji": DISCOUNT_EMOJI,
-    # Chaves antigas continuam válidas em templates personalizados existentes.
-    "verify_emoji": DELIVERY_EMOJI,
-    "member_emoji": USER_EMOJI,
-    "box_emoji": ORDER_EMOJI,
+    "user_emoji": MEMBER_EMOJI,
+    "separator_emoji": "",
+    "verified_emoji": VERIFY_EMOJI,
+    "order_emoji": BOX_EMOJI,
+    "game_emoji": BOX_EMOJI,
+    "product_emoji": BOX_EMOJI,
+    "discount_emoji": VERIFY_EMOJI,
+    "verify_emoji": VERIFY_EMOJI,
+    "member_emoji": MEMBER_EMOJI,
+    "box_emoji": BOX_EMOJI,
 }
 
 
@@ -85,7 +110,10 @@ def effective_delivery_config(raw: dict[str, Any] | None) -> dict[str, object]:
         value = raw[key]
         legacy_values = _LEGACY_DEFAULTS.get(key)
         if legacy_values and isinstance(value, str) and value in legacy_values:
-            # Atualiza apenas o padrão antigo. Templates realmente personalizados são preservados.
+            # Atualiza apenas templates padrão antigos. Templates realmente personalizados são preservados.
+            continue
+        if isinstance(value, str) and value in _FOREIGN_REFERENCE_EMOJIS:
+            # Remove automaticamente IDs que vieram somente da mensagem visual de referência.
             continue
         merged[key] = value
     return merged
@@ -160,15 +188,15 @@ def _discount_values(metadata: dict[str, object], line_total: Decimal) -> tuple[
 
 def validate_delivery_templates(config: dict[str, object]) -> None:
     values = {
-        "delivery": DELIVERY_EMOJI,
+        "delivery": VERIFY_EMOJI,
         "arrow": ARROW_EMOJI,
-        "user": USER_EMOJI,
-        "separator": SEPARATOR_EMOJI,
-        "verified": VERIFIED_EMOJI,
-        "order_icon": ORDER_EMOJI,
-        "game_emoji": GAME_EMOJI,
-        "product_emoji": PRODUCT_EMOJI,
-        "discount_emoji": DISCOUNT_EMOJI,
+        "user": MEMBER_EMOJI,
+        "separator": "",
+        "verified": VERIFY_EMOJI,
+        "order_icon": BOX_EMOJI,
+        "game_emoji": BOX_EMOJI,
+        "product_emoji": BOX_EMOJI,
+        "discount_emoji": VERIFY_EMOJI,
         "verify": VERIFY_EMOJI,
         "member": MEMBER_EMOJI,
         "box": BOX_EMOJI,
@@ -188,9 +216,7 @@ def validate_delivery_templates(config: dict[str, object]) -> None:
         "robux_part": " (120 Robux)",
         "discount_percent": "6%",
         "discount_amount": "R$ -0,60",
-        "discount_line": (
-            f"• {DISCOUNT_EMOJI} `•••••••••• (6%)` **R$ -0,60**"
-        ),
+        "discount_line": f"• {VERIFY_EMOJI} `•••••••••• (6%)` **R$ -0,60**",
     }
     _format(str(config.get("title_template") or ""), values)
     _format(str(config.get("body_template") or ""), values)
@@ -260,7 +286,6 @@ def render_delivery(
         "game_emoji": str(config["game_emoji"]),
         "product_emoji": str(config["product_emoji"]),
         "discount_emoji": str(config["discount_emoji"]),
-        # Compatibilidade com templates antigos.
         "verify": str(config["verify_emoji"]),
         "member": str(config["member_emoji"]),
         "box": str(config["box_emoji"]),
