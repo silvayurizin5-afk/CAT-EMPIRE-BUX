@@ -20,12 +20,17 @@ ADMIN_ACTIONS = (
         "Painel, produtos, cupons, preços, estoques e publicação",
     ),
     (
+        "delivery",
+        "Configurar entregas",
+        "Mensagem pública, emojis, imagem, cor e templates",
+    ),
+    (
         "ai",
         "Configurar IA",
         "Canais autorizados, suporte, sugestões e provedores",
     ),
     ("embed_builder", "Criar mensagem visual", "Editor visual para mensagens do servidor"),
-    ("feedback", "Configurar feedbacks", "Emoji, lembretes e permissões"),
+    ("feedback", "Configurar feedbacks", "Emoji e permissões do canal de avaliações"),
     ("ticket_messages", "Mensagens dos tickets", "Editar textos automáticos dos pedidos"),
     ("new_terms", "Criar ou atualizar termo", "Cadastrar uma nova versão de termo"),
     ("manage_terms", "Gerenciar termos", "Editar, ativar ou desativar termos"),
@@ -73,6 +78,7 @@ class CompactAdminPanelView(discord.ui.LayoutView):
             description="Selecione abaixo o que deseja configurar neste servidor.",
             lines=[
                 "- **Loja:** produtos, cupons, preços, estoques e publicação.",
+                "- **Entregas:** mensagem pública, emojis, imagem e templates.",
                 "- **IA:** canais autorizados, suporte, sugestões e prioridade de provedores.",
                 "- **Automação:** tickets, feedbacks, termos e faixas.",
             ],
