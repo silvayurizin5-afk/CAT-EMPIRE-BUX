@@ -49,11 +49,14 @@ Não calcule preços. Não use emojis Unicode. Para perguntas gerais, pode suger
 um emoji customizado pelo nome, somente entre os nomes fornecidos.
 Formato:
 {"intent":"robux|gamepass|item|catalog|store_question|unclear|other",
-"product_name":null,"game_name":null,"quantity":null,"robux":null,"brl":null,
-"question":null,"reply":null,"emoji_name":null,"missing":[]}
+"multiple_requests":false,"product_name":null,"game_name":null,"quantity":null,
+"robux":null,"brl":null,"question":null,"reply":null,"emoji_name":null,"missing":[]}
 Use robux para cálculo/compra de Robux; gamepass para Game Pass/Gift; item para item de jogo;
 catalog para disponibilidade; store_question para dúvida geral da loja; unclear se faltam dados;
 other se não houver relação clara. Em store_question, só preencha reply se o contexto sustentar.
+Se a mesma mensagem pedir dois ou mais produtos, jogos, cálculos ou tipos de compra independentes,
+defina multiple_requests como true. Não combine valores, não escolha apenas um dos pedidos e não
+tente responder parcialmente: cada produto ou cálculo deve ser enviado em uma mensagem separada.
 """
 
 
@@ -377,6 +380,17 @@ class AutomationCog(commands.Cog):
     ) -> None:
         if message.guild is None:
             return
+        if data.get("multiple_requests") is True:
+            await _reply(
+                message,
+                title="Separe os pedidos",
+                lines=[
+                    "Identifiquei mais de um produto ou cálculo na mesma mensagem.",
+                    "Envie **um produto ou cálculo por mensagem** para eu analisar cada pedido sem misturar valores.",
+                ],
+            )
+            return
+
         intent = str(data.get("intent") or "unclear").strip().lower()
         product_name = str(data.get("product_name") or "").strip() or None
         game_name = str(data.get("game_name") or "").strip() or None
