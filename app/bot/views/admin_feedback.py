@@ -55,46 +55,22 @@ class FeedbackSettingsModal(discord.ui.Modal, title="Configurar feedbacks"):
         placeholder="🐱",
         max_length=128,
     )
-    reminder_minutes = discord.ui.TextInput(
-        label="Lembrete no canal (minutos)",
-        placeholder="5",
-        max_length=4,
-    )
-    dm_cooldown_hours = discord.ui.TextInput(
-        label="Espera até DM (horas)",
-        placeholder="24",
-        max_length=4,
-    )
 
     def __init__(self, *, emoji: str, reminder_minutes: int, dm_cooldown_hours: int) -> None:
         super().__init__()
         self.emoji.default = emoji
-        self.reminder_minutes.default = str(reminder_minutes)
-        self.dm_cooldown_hours.default = str(dm_cooldown_hours)
+        # Mantidos na assinatura por compatibilidade com as telas administrativas existentes.
+        self._legacy_reminder_minutes = reminder_minutes
+        self._legacy_dm_cooldown_hours = dm_cooldown_hours
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
-            return
-        try:
-            reminder = int(str(self.reminder_minutes).strip())
-            dm_hours = int(str(self.dm_cooldown_hours).strip())
-            if reminder < 1 or reminder > 1440:
-                raise ValueError
-            if dm_hours < 1 or dm_hours > 720:
-                raise ValueError
-        except ValueError:
-            await interaction.response.send_message(
-                "Valores inválidos. Lembrete: 1–1440 min. DM: 1–720 horas.",
-                ephemeral=True,
-            )
             return
 
         emoji = str(self.emoji).strip() or "🐱"
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_guild_config(session, interaction.guild.id)
             config.feedback_emoji = emoji
-            config.feedback_reminder_minutes = reminder
-            config.feedback_dm_cooldown_hours = dm_hours
             values = (
                 config.feedback_channel_id,
                 config.customer_role_id,
@@ -111,8 +87,7 @@ class FeedbackSettingsModal(discord.ui.Modal, title="Configurar feedbacks"):
                 target_id=str(interaction.guild.id),
                 details={
                     "emoji": emoji,
-                    "reminder_minutes": reminder,
-                    "dm_cooldown_hours": dm_hours,
+                    "automatic_reminders": False,
                 },
             )
 
@@ -130,7 +105,7 @@ class FeedbackSettingsModal(discord.ui.Modal, title="Configurar feedbacks"):
             else "Configuração salva; revise o canal/cargos se quiser aplicar as permissões automaticamente."
         )
         await interaction.response.send_message(
-            f"Feedbacks configurados. Lembrete em **{reminder} min**, DM após **{dm_hours} h**. "
+            "Feedbacks configurados. Os lembretes automáticos de avaliação estão desativados. "
             + permission_text,
             ephemeral=True,
         )
