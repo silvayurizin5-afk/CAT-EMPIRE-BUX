@@ -3,13 +3,20 @@ from types import SimpleNamespace
 
 from app.bot.cogs import automation_refinement as refine
 from app.bot.cogs import automation_runtime as ai
-from app.bot.cogs.delivery_runtime import (
-    ARROW_EMOJI,
-    _delivery_image,
-    _delivery_item_lines,
-)
+from app.bot.cogs.delivery_runtime import _delivery_image, _delivery_item_lines
 from app.db.models import OrderItem, Product
-from app.services.delivery_settings import render_delivery
+from app.services.delivery_settings import (
+    ARROW_EMOJI,
+    DELIVERY_EMOJI,
+    DISCOUNT_EMOJI,
+    GAME_EMOJI,
+    ORDER_EMOJI,
+    PRODUCT_EMOJI,
+    SEPARATOR_EMOJI,
+    USER_EMOJI,
+    VERIFIED_EMOJI,
+    render_delivery,
+)
 
 
 def _products() -> list[Product]:
@@ -141,38 +148,87 @@ def test_generic_price_question_lists_current_products() -> None:
     assert "R$ 2,90" in reply
 
 
-def test_delivery_uses_game_product_snapshot_image() -> None:
+def test_coupon_question_is_forced_to_live_database_lookup() -> None:
+    result = refine._quick_store_answer(
+        _message("Quais cupons estão disponíveis?"),
+        _products(),
+        {},
+    )
+    assert result is not None
+    assert result["intent"] == "store_question"
+    assert result["reply"] is None
+
+
+def test_coupon_answer_lists_only_available_coupons() -> None:
+    coupons = [
+        SimpleNamespace(
+            code="SAVE10",
+            discount_percent=Decimal("10"),
+            active=True,
+            max_uses=5,
+            uses=2,
+        ),
+        SimpleNamespace(
+            code="ESGOTADO",
+            discount_percent=Decimal("20"),
+            active=True,
+            max_uses=1,
+            uses=1,
+        ),
+    ]
+    reply = refine._coupon_answer(coupons, "Como usa os cupons e quais estão disponíveis?")
+    assert "Adicionar cupom" in reply
+    assert "SAVE10" in reply
+    assert "10%" in reply
+    assert "3 uso(s) restante(s)" in reply
+    assert "ESGOTADO" not in reply
+
+
+def test_delivery_uses_any_order_snapshot_image() -> None:
     item = OrderItem(
         name_snapshot="Notifier",
         unit_price=Decimal("22.00"),
         quantity=1,
         image_url_snapshot="https://example.com/notifier.png",
-        metadata_json={"product_type": "gamepass", "game_name": "BLOX FRUITS"},
+        metadata_json={"product_type": "custom-type", "game_name": "BLOX FRUITS"},
     )
     assert _delivery_image([item]) == "https://example.com/notifier.png"
     line = _delivery_item_lines([item])[0]
-    assert ARROW_EMOJI not in line
     assert "Notifier" in line
     assert "BLOX FRUITS" in line
 
 
-def test_delivery_default_has_no_arrow_and_is_template_driven() -> None:
+def test_delivery_default_matches_requested_layout() -> None:
     item = OrderItem(
-        name_snapshot="Notifier",
-        unit_price=Decimal("22.00"),
-        quantity=2,
-        metadata_json={"product_type": "gamepass", "game_name": "BLOX FRUITS"},
+        name_snapshot="VIP",
+        unit_price=Decimal("4.32"),
+        quantity=1,
+        metadata_json={
+            "product_type": "gamepass",
+            "game_name": "Dungeon Lootr › Morreti Gostoso",
+            "robux_amount": 120,
+            "discount_percent": "6",
+            "original_total": "4.32",
+            "discounted_total": "4.06",
+        },
     )
     title, lines, footer, accent, show_image = render_delivery(
         None,
         order_id="12345678-0000-0000-0000-000000000000",
-        client_mention="@Cliente",
+        client_mention="<@594648746495574069>",
         items=[item],
     )
     text = "\n".join([title, *lines, footer])
-    assert ARROW_EMOJI not in text
-    assert "Notifier" in text
-    assert "BLOX FRUITS" in text
+    assert title == f"# {DELIVERY_EMOJI}{ARROW_EMOJI}Entrega Realizada"
+    assert f"{USER_EMOJI}{SEPARATOR_EMOJI}Cliente:" in text
+    assert f"{VERIFIED_EMOJI}{SEPARATOR_EMOJI}Status: Pedido entregue com sucesso" in text
+    assert f"# {ORDER_EMOJI}{ARROW_EMOJI}Produto(s):" in text
+    assert f"{GAME_EMOJI} Dungeon Lootr › Morreti Gostoso" in text
+    assert f"{PRODUCT_EMOJI} VIP 1× · R$ 4,32 (120 Robux)" in text
+    assert DISCOUNT_EMOJI in text
+    assert "•••••••••• (6%)" in text
+    assert "R$ -0,26" in text
+    assert footer == ""
     assert show_image is True
     assert accent == 0x23A55A
 
