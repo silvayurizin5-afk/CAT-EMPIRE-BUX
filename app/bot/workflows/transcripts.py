@@ -6,6 +6,16 @@ import discord
 
 _BRT = timezone(timedelta(hours=-3), name="BRT")
 _CUSTOM_EMOJI_RE = re.compile(r"&lt;(a?):([A-Za-z0-9_]+):(\d+)&gt;")
+_TICKET_TOPIC_RE = re.compile(
+    r"^NEXTBUY order=([0-9a-fA-F-]{36}) customer=(\d{1,20})$"
+)
+
+
+def _ticket_metadata(topic: str | None) -> tuple[str | None, str | None]:
+    match = _TICKET_TOPIC_RE.fullmatch((topic or "").strip())
+    if match is None:
+        return None, None
+    return match.group(1)[:8].lower(), match.group(2)
 
 
 def _format_text(value: str) -> str:
@@ -145,6 +155,19 @@ async def render_channel_transcript(channel: discord.TextChannel) -> bytes:
     title = f"NEXTBUY • #{channel_name}"
     topic = html.escape(channel.topic or "Sem tópico")
     message_count = len(messages)
+    order_short, customer_id = _ticket_metadata(channel.topic)
+    generated_at = discord.utils.utcnow().astimezone(_BRT).strftime("%d/%m/%Y • %H:%M BRT")
+    context_pills = [
+        f'<span class="pill">Servidor: {guild_name}</span>',
+        f'<span class="pill">Mensagens: {message_count}</span>',
+    ]
+    if order_short:
+        context_pills.append(f'<span class="pill">Pedido: #{html.escape(order_short)}</span>')
+    if customer_id:
+        context_pills.append(f'<span class="pill">Cliente: {html.escape(customer_id)}</span>')
+    context_pills.append(f'<span class="pill">Gerado em: {generated_at}</span>')
+    context_pills.append(f'<span class="pill">Tópico: {topic}</span>')
+    summary_html = "".join(context_pills)
 
     document = f"""<!doctype html>
 <html lang="pt-BR">
@@ -198,11 +221,7 @@ code{{background:var(--code);border:1px solid #343a48;padding:1px 5px;border-rad
 <header><div class="header-inner">
 <div class="brand">NEXTBUY • Transcript</div>
 <h1>#{channel_name}</h1>
-<div class="summary">
-<span class="pill">Servidor: {guild_name}</span>
-<span class="pill">Mensagens: {message_count}</span>
-<span class="pill">Tópico: {topic}</span>
-</div>
+<div class="summary">{summary_html}</div>
 </div></header>
 <main>{''.join(rows) if rows else '<div class="empty">Nenhuma mensagem registrada neste ticket.</div>'}</main>
 </body>
