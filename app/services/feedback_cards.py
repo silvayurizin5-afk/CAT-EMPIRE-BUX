@@ -66,6 +66,11 @@ def _sanitize_card_text(value: str) -> str:
         category = unicodedata.category(char)
         if category.startswith("C") and char not in {"\n", "\t"}:
             continue
+        # Fontes TrueType comuns usadas no card não têm cobertura confiável para
+        # símbolos/emoji Unicode. Mantemos ASCII (inclusive $,+,-,=) e removemos
+        # símbolos não ASCII e marcas isoladas que normalmente viram tofu/quadrados.
+        if code > 0x7F and (category.startswith("S") or category.startswith("M")):
+            continue
         cleaned.append(char)
     return "".join(cleaned)
 
