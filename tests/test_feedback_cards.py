@@ -39,3 +39,13 @@ def test_feedback_card_rejects_invalid_stars() -> None:
     except ValueError:
         return
     raise AssertionError("era esperado ValueError para nota inválida")
+
+
+def test_feedback_card_strips_non_ascii_symbols_that_render_as_boxes() -> None:
+    sanitized = _sanitize_card_text("legal □ ◇ ⚠ ✓ ação R$ 10 + 2")
+    assert "□" not in sanitized
+    assert "◇" not in sanitized
+    assert "⚠" not in sanitized
+    assert "✓" not in sanitized
+    assert "ação" in sanitized
+    assert "R$ 10 + 2" in sanitized
