@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.bot.cogs import automation as base
 from app.bot.cogs import automation_runtime as runtime
 from app.bot.components_v2 import format_percent, strip_generic_emoji
-from app.db.models import RobuxRate, TermsDocument
+from app.db.models import AutoReply, RankTier, RobuxRate, TermsDocument
 from app.db.session import SessionLocal
 from app.db.store_models import StoreCoupon, StorePanelConfig
 from app.services.ai_gateway import AIUnavailable, request_structured_ai
@@ -102,6 +102,33 @@ def _terms_answer(terms, question: str) -> str:
 
     lines = ["Termos públicos atuais da NEXTBUY:"]
     lines.extend(f"- **{term.title}** • versão {term.version}" for term in terms[:20])
+    return "\n".join(lines)
+
+
+def _faq_answer(replies, question: str) -> str | None:
+    normalized = base.normalize_text(question)
+    for reply in replies:
+        keywords = [base.normalize_text(str(item)) for item in (reply.keywords or [])]
+        if (
+            base.normalize_text(reply.name) in normalized
+            or base.normalize_text(reply.title) in normalized
+            or any(keyword and keyword in normalized for keyword in keywords)
+        ):
+            content = " ".join((reply.content or "").split())
+            if not content:
+                continue
+            return f"**{reply.title}**\n{content[:1800]}"
+    return None
+
+
+def _ranks_answer(tiers) -> str:
+    if not tiers:
+        return "No momento não há faixas de cliente ativas cadastradas."
+    lines = ["Faixas de cliente atuais:"]
+    for tier in tiers[:20]:
+        lines.append(
+            f"- **{tier.name}**: a partir de **{base.format_brl(tier.min_spend)}** em compras"
+        )
     return "\n".join(lines)
 
 
@@ -240,6 +267,10 @@ def _quick_store_answer(message, products, state):
             "aceita pix",
             "como funciona a entrega",
             "prazo de entrega",
+            "faixas de cliente",
+            "cargos por gasto",
+            "rank de cliente",
+            "ranks de cliente",
         )
     ):
         return {
@@ -349,6 +380,26 @@ async def _load_store_state(guild_id: int) -> dict[str, object]:
                 )
             ).all()
         )
+        faq_replies = list(
+            (
+                await session.scalars(
+                    select(AutoReply)
+                    .where(AutoReply.guild_id == guild_id, AutoReply.active.is_(True))
+                    .order_by(AutoReply.id.asc())
+                    .limit(100)
+                )
+            ).all()
+        )
+        rank_tiers = list(
+            (
+                await session.scalars(
+                    select(RankTier)
+                    .where(RankTier.guild_id == guild_id, RankTier.active.is_(True))
+                    .order_by(RankTier.min_spend.asc(), RankTier.id.asc())
+                    .limit(50)
+                )
+            ).all()
+        )
         panel = await session.scalar(
             select(StorePanelConfig).where(StorePanelConfig.guild_id == guild_id)
         )
@@ -383,6 +434,22 @@ async def _load_store_state(guild_id: int) -> dict[str, object]:
             }
             for term in terms
         ],
+        "faq": [
+            {
+                "name": reply.name,
+                "title": reply.title,
+                "keywords": list(reply.keywords or []),
+                "content": (reply.content or "")[:1200],
+            }
+            for reply in faq_replies
+        ],
+        "rank_tiers": [
+            {
+                "name": tier.name,
+                "min_spend": str(tier.min_spend),
+            }
+            for tier in rank_tiers
+        ],
         "panel": (
             {
                 "title": panel.title,
@@ -398,6 +465,8 @@ async def _load_store_state(guild_id: int) -> dict[str, object]:
         "_coupon_objects": coupons,
         "_rate_objects": rates,
         "_term_objects": terms,
+        "_faq_objects": faq_replies,
+        "_rank_objects": rank_tiers,
         "_panel_object": panel,
     }
 
@@ -412,10 +481,16 @@ async def _general_answer(self, message, products, *, state):
     coupons = store_state.pop("_coupon_objects", [])
     rates = store_state.pop("_rate_objects", [])
     terms = store_state.pop("_term_objects", [])
+    faq_replies = store_state.pop("_faq_objects", [])
+    rank_tiers = store_state.pop("_rank_objects", [])
     panel = store_state.pop("_panel_object", None)
 
     if "cupom" in normalized or "cupons" in normalized:
         return _coupon_answer(coupons, message.content)
+
+    faq_reply = _faq_answer(faq_replies, message.content)
+    if faq_reply:
+        return faq_reply
 
     if any(
         marker in normalized
@@ -437,6 +512,12 @@ async def _general_answer(self, message, products, *, state):
         for marker in ("termo", "termos", "politica", "politicas", "reembolso")
     ):
         return _terms_answer(terms, message.content)
+
+    if any(
+        marker in normalized
+        for marker in ("faixas de cliente", "cargos por gasto", "rank de cliente", "ranks de cliente")
+    ):
+        return _ranks_answer(rank_tiers)
 
     if any(
         marker in normalized
