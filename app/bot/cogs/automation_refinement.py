@@ -52,6 +52,59 @@ def _stock_product_answer(product) -> str:
     return "Estoque em tempo real:\n" + _live_product_line(product)
 
 
+def _catalog_answer(products) -> str:
+    available = runtime._available_products(products)
+    if not available:
+        return "No momento não há produtos ativos disponíveis na loja."
+    lines = ["Catálogo disponível agora:"]
+    lines.extend(_live_product_line(product) for product in available[:20])
+    if len(available) > 20:
+        lines.append(f"- +{len(available) - 20} produto(s)")
+    return "\n".join(lines)
+
+
+def _robux_rates_answer(rates, question: str) -> str:
+    if not rates:
+        return "No momento não há cotação de Robux ativa cadastrada."
+
+    normalized = base.normalize_text(question)
+    matched = [
+        rate
+        for rate in rates
+        if base.normalize_text(rate.code) in normalized
+        or base.normalize_text(rate.label) in normalized
+    ]
+    selected = matched if matched else rates
+    lines = ["Cotações de Robux ativas agora:"]
+    for rate in selected[:10]:
+        per_100 = rate.price_per_robux * 100
+        delivery = f" • {rate.delivery_label}" if rate.delivery_label else ""
+        lines.append(
+            f"- **{rate.label}**: **{base.format_brl(per_100)} por 100 Robux**{delivery}"
+        )
+    return "\n".join(lines)
+
+
+def _terms_answer(terms, question: str) -> str:
+    if not terms:
+        return "No momento não há termos públicos ativos cadastrados."
+    normalized = base.normalize_text(question)
+    matched = [
+        term
+        for term in terms
+        if base.normalize_text(term.code) in normalized
+        or base.normalize_text(term.title) in normalized
+    ]
+    if matched:
+        term = matched[0]
+        content = " ".join((term.content or "").split())
+        return f"**{term.title}** (versão {term.version})\n{content[:1800]}"
+
+    lines = ["Termos públicos atuais da NEXTBUY:"]
+    lines.extend(f"- **{term.title}** • versão {term.version}" for term in terms[:20])
+    return "\n".join(lines)
+
+
 def _coupon_available(coupon) -> bool:
     return bool(
         coupon.active
@@ -152,6 +205,24 @@ def _quick_store_answer(message, products, state):
             "emoji_name": None,
         }
 
+    if any(
+        marker in normalized
+        for marker in (
+            "quais produtos",
+            "produtos da loja",
+            "catalogo da loja",
+            "catalogo atual",
+            "o que vende",
+            "o que voces vendem",
+        )
+    ):
+        return {
+            "intent": "store_question",
+            "multiple_requests": False,
+            "reply": _catalog_answer(products),
+            "emoji_name": None,
+        }
+
     asks_price = any(marker in normalized for marker in runtime._PRICE_MARKERS)
     generic_price = any(
         marker in normalized
@@ -213,6 +284,7 @@ def _product_snapshot(products) -> list[dict[str, object]]:
                 "stock_unlimited": product.stock_quantity is None,
                 "active": bool(product.active),
                 "delivery_mode": product.delivery_mode,
+                "robux_amount": dict(product.metadata_json or {}).get("robux_amount"),
                 "has_image": bool(product.image_url),
             }
         )
@@ -298,6 +370,9 @@ async def _load_store_state(guild_id: int) -> dict[str, object]:
             else None
         ),
         "_coupon_objects": coupons,
+        "_rate_objects": rates,
+        "_term_objects": terms,
+        "_panel_object": panel,
     }
 
 
@@ -308,10 +383,66 @@ async def _general_answer(self, message, products, *, state):
     store_state = await _load_store_state(message.guild.id)
     normalized = base.normalize_text(message.content)
 
-    if "cupom" in normalized or "cupons" in normalized:
-        return _coupon_answer(store_state.pop("_coupon_objects"), message.content)
+    coupons = store_state.pop("_coupon_objects", [])
+    rates = store_state.pop("_rate_objects", [])
+    terms = store_state.pop("_term_objects", [])
+    panel = store_state.pop("_panel_object", None)
 
-    store_state.pop("_coupon_objects", None)
+    if "cupom" in normalized or "cupons" in normalized:
+        return _coupon_answer(coupons, message.content)
+
+    if any(
+        marker in normalized
+        for marker in (
+            "cotacao",
+            "cotacoes",
+            "preco do robux",
+            "valor do robux",
+            "valor dos robux",
+            "taxa de robux",
+            "quanto ta o robux",
+            "quanto esta o robux",
+        )
+    ):
+        return _robux_rates_answer(rates, message.content)
+
+    if any(
+        marker in normalized
+        for marker in ("termo", "termos", "politica", "politicas", "reembolso")
+    ):
+        return _terms_answer(terms, message.content)
+
+    if any(
+        marker in normalized
+        for marker in ("como comprar", "como faco para comprar", "como faz para comprar")
+    ):
+        buy_label = getattr(panel, "buy_button_label", None) or "Comprar"
+        coupon_label = getattr(panel, "coupon_button_label", None) or "Adicionar cupom"
+        return (
+            "Para comprar na NEXTBUY, abra o painel da loja, selecione o produto, ajuste a "
+            f"quantidade se necessário e use **{buy_label}**. Se tiver um cupom, use "
+            f"**{coupon_label}** antes de finalizar. O pagamento é por **PIX** e, após a "
+            "confirmação, o pedido é liberado para atendimento."
+        )
+
+    if any(
+        marker in normalized
+        for marker in ("forma de pagamento", "formas de pagamento", "aceita pix", "pagamento")
+    ):
+        return (
+            "A NEXTBUY usa **PIX** para os pedidos atuais. O pagamento é registrado no ticket "
+            "e, depois da confirmação, o pedido fica liberado para atendimento."
+        )
+
+    if "entrega" in normalized and any(
+        marker in normalized
+        for marker in ("como", "funciona", "prazo", "depois", "quando")
+    ):
+        return (
+            "Depois da confirmação do PIX, o pedido entra em atendimento. Quando a equipe conclui "
+            "o serviço, marca o pedido como entregue e a entrega é publicada no canal configurado."
+        )
+
     public_sources = []
     if not _store_specific_question(message.content):
         public_sources = await fetch_public_knowledge(message.content)
