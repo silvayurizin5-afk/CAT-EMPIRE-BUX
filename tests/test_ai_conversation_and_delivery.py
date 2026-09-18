@@ -322,3 +322,30 @@ def test_live_store_topics_bypass_llm_classification() -> None:
         assert result is not None
         assert result["intent"] == "store_question"
         assert result["multiple_requests"] is False
+
+
+def test_ai_uses_admin_faq_as_official_store_source() -> None:
+    replies = [
+        SimpleNamespace(
+            name="Prazo",
+            title="Prazo de entrega",
+            keywords=["prazo", "demora"],
+            content="A entrega começa após a confirmação do PIX.",
+        )
+    ]
+    reply = refine._faq_answer(replies, "Quanto demora a entrega?")
+    assert reply is not None
+    assert "Prazo de entrega" in reply
+    assert "confirmação do PIX" in reply
+
+
+def test_ai_lists_live_customer_rank_tiers() -> None:
+    tiers = [
+        SimpleNamespace(name="VIP", min_spend=Decimal("100.00")),
+        SimpleNamespace(name="Elite", min_spend=Decimal("500.00")),
+    ]
+    reply = refine._ranks_answer(tiers)
+    assert "VIP" in reply
+    assert "R$ 100,00" in reply
+    assert "Elite" in reply
+    assert "R$ 500,00" in reply
