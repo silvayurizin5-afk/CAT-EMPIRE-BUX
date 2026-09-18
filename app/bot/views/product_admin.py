@@ -4,6 +4,7 @@ import discord
 
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.emoji import select_option_emoji
+from app.bot.workflows.leaderboard import refresh_leaderboard
 from app.db.models import Product
 from app.db.session import SessionLocal
 from app.services.calculator import format_brl
@@ -15,11 +16,30 @@ from app.services.catalog import (
 )
 
 
+def _normalized_product_type(product: Product) -> str:
+    return str(product.product_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _is_gamepass(product: Product) -> bool:
+    return _normalized_product_type(product) in {"gamepass", "game_pass"}
+
+
+def _configured_robux_amount(product: Product) -> int | None:
+    if not _is_gamepass(product):
+        return None
+    raw = dict(product.metadata_json or {}).get("robux_amount")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _product_lines(product: Product) -> list[str]:
     status = "Ativo" if product.active else "Desativado"
     price = format_brl(product.price_credits) if product.price_credits is not None else "Sem preço"
     stock = "Ilimitado" if product.stock_quantity is None else str(product.stock_quantity)
-    return [
+    lines = [
         product.description or "Sem descrição.",
         f"**ID:** `{product.id}`",
         f"**Tipo:** `{product.product_type}`",
@@ -30,6 +50,14 @@ def _product_lines(product: Product) -> list[str]:
         f"**Status:** `{status}`",
         f"**Emoji da loja:** {product.emoji or '—'}",
     ]
+    if _is_gamepass(product):
+        amount = _configured_robux_amount(product)
+        lines.append(
+            f"**Valor da Game Pass:** `{amount} Robux`"
+            if amount is not None
+            else "**Valor da Game Pass:** `não configurado`"
+        )
+    return lines
 
 
 def build_product_admin_embed(product: Product) -> discord.Embed:
@@ -167,6 +195,69 @@ class ProductStockModal(discord.ui.Modal, title="Configurar estoque"):
         await interaction.edit_original_response(content=f"Estoque atualizado para **{label}**.")
 
 
+class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux da Game Pass"):
+    def __init__(self, product: Product) -> None:
+        super().__init__()
+        self.product_id = product.id
+        amount = _configured_robux_amount(product)
+        self.robux_amount = discord.ui.TextInput(
+            label="Valor da Game Pass em Robux",
+            placeholder="Ex: 2200",
+            required=False,
+            max_length=12,
+            default=str(amount or ""),
+        )
+        self.add_item(self.robux_amount)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        raw = str(self.robux_amount).strip()
+        if raw:
+            if not raw.isdigit() or int(raw) <= 0:
+                await interaction.response.send_message(
+                    "Use um número inteiro positivo de Robux, por exemplo `2200`.",
+                    ephemeral=True,
+                )
+                return
+            amount: int | None = int(raw)
+        else:
+            amount = None
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with SessionLocal() as session, session.begin():
+            product = await session.get(Product, self.product_id)
+            if product is None or product.guild_id != interaction.guild.id:
+                await interaction.edit_original_response(content="Produto não encontrado.")
+                return
+            if not _is_gamepass(product):
+                await interaction.edit_original_response(
+                    content=(
+                        "Esse campo é usado apenas para produtos do tipo `gamepass`. "
+                        "Itens comuns atualizam somente o valor gasto em reais."
+                    )
+                )
+                return
+
+            metadata = dict(product.metadata_json or {})
+            if amount is None:
+                metadata.pop("robux_amount", None)
+            else:
+                metadata["robux_amount"] = amount
+            product.metadata_json = metadata
+            await session.flush()
+
+        await refresh_leaderboard(interaction.guild)
+        await interaction.edit_original_response(
+            content=(
+                f"Game Pass configurada como **{amount} Robux**. "
+                "Perfil e ranking foram recalculados."
+                if amount is not None
+                else "Valor em Robux removido. Perfil e ranking foram recalculados."
+            )
+        )
+
+
 class ProductActionsView(discord.ui.View):
     def __init__(self, product_id: int) -> None:
         super().__init__(timeout=180)
@@ -189,6 +280,22 @@ class ProductActionsView(discord.ui.View):
             await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
             return
         await interaction.response.send_modal(ProductStockModal(product))
+
+    @discord.ui.button(label="Valor em Robux", style=discord.ButtonStyle.secondary)
+    async def robux_value(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        async with SessionLocal() as session:
+            product = await session.get(Product, self.product_id)
+        if product is None:
+            await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
+            return
+        if not _is_gamepass(product):
+            await interaction.response.send_message(
+                "Itens comuns atualizam apenas o valor gasto em reais. "
+                "O valor em Robux é configurado somente para Game Pass.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(ProductRobuxValueModal(product))
 
     @discord.ui.button(label="Ativar/Desativar", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -265,7 +372,10 @@ class ProductManagementView(discord.ui.LayoutView):
         super().__init__(timeout=180)
         card = CardLayout(
             title="Gerenciar produtos",
-            description="Escolha um produto para editar preço, estoque, visual ou status.",
+            description=(
+                "Escolha um produto para editar preço, estoque, visual, "
+                "valor em Robux ou status."
+            ),
             timeout=180,
         )
         self.container = card.container
