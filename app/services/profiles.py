@@ -1,13 +1,14 @@
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import ZERO, money
-from app.db.models import Order, OrderItem, User
+from app.db.models import Order, OrderItem, Product, User
 
 ACTIVE_SPEND_STATUSES = ("paid", "processing", "delivered")
+ROBUX_TRACKED_PRODUCT_TYPES = {"robux", "gamepass", "game_pass"}
 
 
 @dataclass(slots=True)
@@ -41,14 +42,55 @@ def _spend_subquery(guild_id: int):
     )
 
 
-def _robux_from_metadata(metadata: dict | None) -> int:
-    if not metadata:
+def _normalize_product_type(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _positive_int(value: object) -> int:
+    if value in {None, ""}:
         return 0
     try:
-        value = int(metadata.get("robux_amount") or 0)
-    except (TypeError, ValueError):
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
         return 0
-    return max(0, value)
+    if parsed <= 0 or parsed != parsed.to_integral_value():
+        return 0
+    return int(parsed)
+
+
+def _robux_from_order_item(
+    metadata: dict | None,
+    *,
+    quantity: int = 1,
+    current_product_type: str | None = None,
+    current_product_metadata: dict | None = None,
+) -> int:
+    """Conta Robux somente para Game Pass e compras diretas de Robux.
+
+    Itens comuns atualizam apenas o valor gasto em reais, mesmo que algum metadata
+    antigo contenha acidentalmente a chave robux_amount.
+    """
+
+    snapshot = dict(metadata or {})
+    product_type = _normalize_product_type(
+        snapshot.get("product_type") or current_product_type
+    )
+    if product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
+        return 0
+
+    raw_amount = snapshot.get("robux_amount")
+    if raw_amount in {None, ""}:
+        raw_amount = dict(current_product_metadata or {}).get("robux_amount")
+
+    amount = _positive_int(raw_amount)
+    if amount <= 0:
+        return 0
+
+    try:
+        safe_quantity = max(1, int(quantity or 1))
+    except (TypeError, ValueError):
+        safe_quantity = 1
+    return amount * safe_quantity
 
 
 async def get_customer_profile(
@@ -77,8 +119,15 @@ async def get_customer_profile(
 
     item_rows = (
         await session.execute(
-            select(OrderItem.name_snapshot, OrderItem.metadata_json)
+            select(
+                OrderItem.name_snapshot,
+                OrderItem.metadata_json,
+                OrderItem.quantity,
+                Product.product_type,
+                Product.metadata_json.label("current_product_metadata"),
+            )
             .join(Order, Order.id == OrderItem.order_id)
+            .outerjoin(Product, Product.id == OrderItem.product_id)
             .where(
                 Order.guild_id == guild_id,
                 Order.user_id == user.id,
@@ -92,8 +141,13 @@ async def get_customer_profile(
     recent_products: list[str] = []
     games: list[str] = []
     robux_purchased = 0
-    for item_name, metadata in item_rows:
-        robux_purchased += _robux_from_metadata(metadata)
+    for item_name, metadata, quantity, product_type, product_metadata in item_rows:
+        robux_purchased += _robux_from_order_item(
+            metadata,
+            quantity=quantity,
+            current_product_type=product_type,
+            current_product_metadata=product_metadata,
+        )
         if item_name not in recent_products:
             recent_products.append(item_name)
         game_name = (metadata or {}).get("game_name")
@@ -129,8 +183,15 @@ async def list_leaderboard(
     user_ids = [int(row.id) for row in rows]
     item_rows = (
         await session.execute(
-            select(Order.user_id, OrderItem.metadata_json)
+            select(
+                Order.user_id,
+                OrderItem.metadata_json,
+                OrderItem.quantity,
+                Product.product_type,
+                Product.metadata_json.label("current_product_metadata"),
+            )
             .join(OrderItem, OrderItem.order_id == Order.id)
+            .outerjoin(Product, Product.id == OrderItem.product_id)
             .where(
                 Order.guild_id == guild_id,
                 Order.user_id.in_(user_ids),
@@ -139,9 +200,14 @@ async def list_leaderboard(
         )
     ).all()
     robux_by_user: dict[int, int] = {user_id: 0 for user_id in user_ids}
-    for user_id, metadata in item_rows:
-        robux_by_user[int(user_id)] = robux_by_user.get(int(user_id), 0) + _robux_from_metadata(
-            metadata
+    for user_id, metadata, quantity, product_type, product_metadata in item_rows:
+        robux_by_user[int(user_id)] = robux_by_user.get(
+            int(user_id), 0
+        ) + _robux_from_order_item(
+            metadata,
+            quantity=quantity,
+            current_product_type=product_type,
+            current_product_metadata=product_metadata,
         )
 
     return [
