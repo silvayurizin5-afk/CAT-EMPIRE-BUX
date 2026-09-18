@@ -128,7 +128,7 @@ class CheckoutControlsModal(discord.ui.Modal, title="Tela antes do pagamento"):
         )
 
 
-class GameIconModal(discord.ui.Modal, title="Ícone do jogo no cálculo"):
+class GameIconModal(discord.ui.Modal, title="Ícone do jogo"):
     game_name = discord.ui.TextInput(
         label="Nome do jogo",
         placeholder="Ex: Blox Fruits",
@@ -161,7 +161,7 @@ class GameIconModal(discord.ui.Modal, title="Ícone do jogo no cálculo"):
             config.game_icons = icons
         action = "configurado" if emoji else "removido"
         await interaction.edit_original_response(
-            content=f"Ícone de **{game}** {action} para os cálculos."
+            content=f"Ícone de **{game}** {action} para cálculos e entregas."
         )
 
 
@@ -186,7 +186,7 @@ STORE_PANEL_ACTIONS_V2 = (
     (
         "game_icons",
         "Ícones dos jogos",
-        "Emoji do jogo usado somente nos cálculos",
+        "Emoji do jogo usado nos cálculos e nas entregas",
     ),
     BASE_ACTIONS[-1],
 )
