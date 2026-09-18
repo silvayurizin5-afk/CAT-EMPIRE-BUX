@@ -174,7 +174,11 @@ async def _delivery_context(
             configured_game_icon = str(
                 game_icons.get(normalize_text(game_name)) or ""
             ).strip()
-            raw_game_asset = str(metadata.get("game_emoji") or configured_game_icon).strip()
+            # O ícone configurado em "Ícones dos jogos" é a fonte principal da entrega.
+            # Um snapshot antigo nunca deve substituir a configuração atual do jogo.
+            raw_game_asset = str(
+                configured_game_icon or metadata.get("game_emoji") or ""
+            ).strip()
             game_emoji = _inline_emoji_from_asset(raw_game_asset)
 
             if game_emoji:
