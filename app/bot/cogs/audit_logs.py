@@ -35,12 +35,27 @@ _DETAIL_LABELS = {
     "amount_brl": "Valor",
     "customer_discord_id": "Cliente",
     "channel_id": "Canal",
+    "role_id": "Cargo",
     "reason": "Motivo",
     "transcript_saved": "Transcript salvo",
     "tx_id": "Transação",
     "txId": "Transação",
     "payment_id": "Pagamento",
     "order_id": "Pedido",
+    "product_id": "Produto",
+    "product_name": "Produto",
+    "quantity": "Quantidade",
+    "stock": "Estoque",
+    "coupon_code": "Cupom",
+    "discount_percent": "Desconto",
+    "robux": "Robux",
+    "robux_amount": "Robux",
+    "rate_code": "Cotação",
+    "price_per_robux": "Preço por Robux",
+    "old_status": "Status anterior",
+    "new_status": "Novo status",
+    "automatic_reminders": "Lembretes automáticos",
+    "emoji": "Emoji",
 }
 
 
@@ -59,6 +74,13 @@ def _format_detail(key: str, value) -> str:
         return f"<@{value}>"
     if key == "channel_id" and str(value).isdigit():
         return f"<#{value}>"
+    if key == "role_id" and str(value).isdigit():
+        return f"<@&{value}>"
+    if key == "discount_percent":
+        try:
+            return f"{Decimal(str(value)):g}%"
+        except (InvalidOperation, ValueError):
+            return str(value)
     if isinstance(value, bool):
         return "Sim" if value else "Não"
     if isinstance(value, (list, tuple, set)):
@@ -114,16 +136,15 @@ def build_audit_embed(item: PendingAuditDelivery) -> discord.Embed:
         )
 
     extras = [
-        f"**{key.replace('_', ' ').title()}:** {_format_detail(key, value)}"
+        f"**{key.replace('_', ' ').replace('.', ' ').title()}:** {_format_detail(key, value)}"
         for key, value in item.details.items()
         if key not in known_keys
     ]
     if extras:
         embed.add_field(name="Informações adicionais", value="\n".join(extras)[:1024], inline=False)
 
-    technical_target = f" • {item.target_id}" if item.target_id else ""
     embed.set_footer(
-        text=f"Registro #{item.audit_log_id} • {item.action}{technical_target}"[:2048]
+        text=f"NEXTBUY • Auditoria #{item.audit_log_id} • Código: {item.action}"[:2048]
     )
     return embed
 
