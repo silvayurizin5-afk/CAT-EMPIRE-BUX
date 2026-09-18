@@ -223,6 +223,32 @@ def _quick_store_answer(message, products, state):
             "emoji_name": None,
         }
 
+    if any(
+        marker in normalized
+        for marker in (
+            "cotacao",
+            "cotacoes",
+            "preco do robux",
+            "valor do robux",
+            "termo",
+            "termos",
+            "politica",
+            "reembolso",
+            "como comprar",
+            "forma de pagamento",
+            "formas de pagamento",
+            "aceita pix",
+            "como funciona a entrega",
+            "prazo de entrega",
+        )
+    ):
+        return {
+            "intent": "store_question",
+            "multiple_requests": False,
+            "reply": None,
+            "emoji_name": None,
+        }
+
     asks_price = any(marker in normalized for marker in runtime._PRICE_MARKERS)
     generic_price = any(
         marker in normalized
