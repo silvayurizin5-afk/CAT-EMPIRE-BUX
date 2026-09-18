@@ -1,11 +1,12 @@
 from decimal import Decimal, InvalidOperation
 
 import discord
+from sqlalchemy import select
 
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.emoji import select_option_emoji
 from app.bot.workflows.leaderboard import refresh_leaderboard
-from app.db.models import Product
+from app.db.models import OrderItem, Product
 from app.db.session import SessionLocal
 from app.services.calculator import format_brl
 from app.services.catalog import (
@@ -240,20 +241,46 @@ class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux da Game Pas
                 return
 
             metadata = dict(product.metadata_json or {})
+            backfilled = 0
             if amount is None:
                 metadata.pop("robux_amount", None)
             else:
                 metadata["robux_amount"] = amount
             product.metadata_json = metadata
+
+            # Pedidos antigos podem ter sido criados antes de existir a configuração
+            # robux_amount. Congelamos o valor apenas nos snapshots que ainda não têm
+            # essa informação, preservando o histórico se o produto mudar no futuro.
+            if amount is not None:
+                old_items = list(
+                    (
+                        await session.scalars(
+                            select(OrderItem).where(OrderItem.product_id == product.id)
+                        )
+                    ).all()
+                )
+                for item in old_items:
+                    item_metadata = dict(item.metadata_json or {})
+                    if item_metadata.get("robux_amount") not in (None, "", 0, "0"):
+                        continue
+                    item_metadata["robux_amount"] = amount
+                    item_metadata.setdefault("product_type", product.product_type)
+                    item.metadata_json = item_metadata
+                    backfilled += 1
+
             await session.flush()
 
         await refresh_leaderboard(interaction.guild)
         await interaction.edit_original_response(
             content=(
-                f"Game Pass configurada como **{amount} Robux**. "
-                "Perfil e ranking foram recalculados."
+                (
+                    f"Game Pass configurada como **{amount} Robux**. "
+                    f"**{backfilled}** pedido(s) antigo(s) sem valor em Robux foram atualizados. "
+                    "Perfil e ranking foram recalculados."
+                )
                 if amount is not None
-                else "Valor em Robux removido. Perfil e ranking foram recalculados."
+                else "Valor em Robux removido do produto. Os snapshots históricos foram preservados "
+                "e o perfil/ranking foi recalculado."
             )
         )
 
