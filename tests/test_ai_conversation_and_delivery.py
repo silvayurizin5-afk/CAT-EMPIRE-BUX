@@ -309,3 +309,16 @@ def test_ai_product_snapshot_includes_gamepass_robux_value() -> None:
     products[0].metadata_json = {"robux_amount": 2200}
     snapshot = refine._product_snapshot(products)
     assert snapshot[0]["robux_amount"] == 2200
+
+
+def test_live_store_topics_bypass_llm_classification() -> None:
+    for text in (
+        "Quais as cotações atuais?",
+        "Quais são os termos da loja?",
+        "Qual a forma de pagamento?",
+        "Como funciona a entrega?",
+    ):
+        result = refine._quick_store_answer(_message(text), _products(), {})
+        assert result is not None
+        assert result["intent"] == "store_question"
+        assert result["multiple_requests"] is False
