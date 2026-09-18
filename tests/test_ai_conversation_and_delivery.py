@@ -260,3 +260,52 @@ def test_delivery_accepts_fully_custom_text_templates() -> None:
     assert footer == "#abcdef12"
     assert accent == 0x112233
     assert show_image is False
+
+
+def test_ai_catalog_question_uses_live_products_without_llm() -> None:
+    result = refine._quick_store_answer(
+        _message("Quais produtos da loja?"),
+        _products(),
+        {},
+    )
+    assert result is not None
+    reply = str(result["reply"])
+    assert "Notifier" in reply
+    assert "Robux" in reply
+    assert "R$ 22,00" in reply
+
+
+def test_ai_live_robux_rates_answer() -> None:
+    rates = [
+        SimpleNamespace(
+            code="padrao",
+            label="Robux padrão",
+            price_per_robux=Decimal("0.029"),
+            delivery_label="Cotação padrão da loja",
+        )
+    ]
+    reply = refine._robux_rates_answer(rates, "Qual o valor do robux?")
+    assert "Robux padrão" in reply
+    assert "R$ 2,90 por 100 Robux" in reply
+
+
+def test_ai_live_terms_answer() -> None:
+    terms = [
+        SimpleNamespace(
+            code="reembolsos",
+            title="Política de reembolso",
+            version=3,
+            content="Reembolsos seguem as regras publicadas pela NEXTBUY.",
+        )
+    ]
+    reply = refine._terms_answer(terms, "Qual a política de reembolso?")
+    assert "Política de reembolso" in reply
+    assert "versão 3" in reply
+    assert "Reembolsos seguem" in reply
+
+
+def test_ai_product_snapshot_includes_gamepass_robux_value() -> None:
+    products = _products()
+    products[0].metadata_json = {"robux_amount": 2200}
+    snapshot = refine._product_snapshot(products)
+    assert snapshot[0]["robux_amount"] == 2200
