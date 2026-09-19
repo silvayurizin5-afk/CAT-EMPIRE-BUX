@@ -349,3 +349,30 @@ def test_ai_lists_live_customer_rank_tiers() -> None:
     assert "R$ 100,00" in reply
     assert "Elite" in reply
     assert "R$ 500,00" in reply
+
+
+def test_ai_fee_followup_uses_remembered_robux_amount() -> None:
+    state = {"robux_amount": 200}
+    result = ai._quick_store_answer(
+        _message("E quanto é sem cobrir a taxa?"),
+        _products(),
+        state,
+    )
+    assert result is not None
+    assert result["intent"] == "store_question"
+    reply = str(result["reply"])
+    assert "200 Robux" in reply
+    assert "R$ 5,80" in reply
+    assert "Via Plus" in reply
+
+
+def test_ai_cover_fee_followup_uses_remembered_robux_amount() -> None:
+    state = {"robux_amount": 200}
+    result = ai._quick_store_answer(
+        _message("E cobrindo a taxa?"),
+        _products(),
+        state,
+    )
+    assert result is not None
+    reply = str(result["reply"])
+    assert "R$ 8,29" in reply
