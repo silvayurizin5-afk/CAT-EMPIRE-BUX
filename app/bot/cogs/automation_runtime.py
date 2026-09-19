@@ -603,6 +603,7 @@ async def _interpret(
         "conversation_context": {
             "game_name": state.get("game_name"),
             "product_name": state.get("product_name"),
+            "robux_amount": state.get("robux_amount"),
             "last_intent": state.get("intent"),
         },
         "catalog": base._snapshot(products),
