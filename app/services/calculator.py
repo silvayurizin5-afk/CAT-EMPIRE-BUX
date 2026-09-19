@@ -7,7 +7,7 @@ from enum import StrEnum
 from app.core.money import money
 
 ROBUX_PRICE_PER_100 = Decimal("2.90")
-VIA_PLUS_PRICE_PER_100 = Decimal("5.10")
+VIA_PLUS_PRICE_PER_100 = ROBUX_PRICE_PER_100
 ROBLOX_NET_AFTER_FEE = Decimal("0.70")
 
 
