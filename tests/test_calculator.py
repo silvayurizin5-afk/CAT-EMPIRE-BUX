@@ -61,7 +61,7 @@ def test_ignore_invalid_or_legacy_credit_messages(message: str) -> None:
 def test_robux_quote_uses_brl_only() -> None:
     quote = robux_quote(500)
     assert quote.gamepass_brl == Decimal("14.50")
-    assert quote.via_plus_brl == Decimal("25.50")
+    assert quote.via_plus_brl == Decimal("14.50")
     assert quote.covering_fee_brl == Decimal("20.71")
 
 
@@ -71,3 +71,9 @@ def test_money_converts_to_robux_using_confirmed_base_price() -> None:
 
 def test_discount_applies_to_final_brl_price() -> None:
     assert apply_discount(Decimal("10"), Decimal("10")) == Decimal("9.00")
+
+
+def test_via_plus_uses_same_normal_rate_as_gamepass() -> None:
+    quote = robux_quote(200)
+    assert quote.gamepass_brl == Decimal("5.80")
+    assert quote.via_plus_brl == Decimal("5.80")
