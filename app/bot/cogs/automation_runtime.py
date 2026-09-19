@@ -99,6 +99,19 @@ _GAMEPASS_LIST_MARKERS = (
 )
 
 _PRICE_MARKERS = ("quanto custa", "qual o preco", "qual preco", "preco de", "valor de")
+_NO_FEE_MARKERS = (
+    "sem cobrir a taxa",
+    "sem cobrir taxa",
+    "sem taxa",
+    "valor normal",
+    "preco normal",
+)
+_COVER_FEE_MARKERS = (
+    "cobrindo a taxa",
+    "cobrir a taxa",
+    "com taxa",
+)
+_VIA_PLUS_MARKERS = ("via plus", "plus")
 
 
 def _numeric_amount(text: str) -> int | None:
@@ -306,6 +319,27 @@ def _gamepass_quote_answer(amount: int) -> str:
     )
 
 
+def _robux_followup_answer(normalized: str, amount: int) -> str | None:
+    quote = base.robux_quote(amount)
+    if any(marker in normalized for marker in _NO_FEE_MARKERS):
+        return (
+            f"Para **{base.format_robux(amount)}**, sem cobrir a taxa, o valor normal é "
+            f"**{base.format_brl(quote.gamepass_brl)}**. "
+            f"O **Via Plus usa o mesmo valor: {base.format_brl(quote.via_plus_brl)}**."
+        )
+    if any(marker in normalized for marker in _COVER_FEE_MARKERS):
+        return (
+            f"Para **{base.format_robux(amount)}**, cobrindo a taxa, fica "
+            f"**{base.format_brl(quote.covering_fee_brl)}**."
+        )
+    if any(marker in normalized for marker in _VIA_PLUS_MARKERS):
+        return (
+            f"Para **{base.format_robux(amount)}**, o **Via Plus** custa "
+            f"**{base.format_brl(quote.via_plus_brl)}**."
+        )
+    return None
+
+
 def _get_state(self, key: tuple[int, int]) -> dict[str, object]:
     now = time.monotonic()
     state = self._conversation_context.get(key)
@@ -341,6 +375,17 @@ def _quick_store_answer(
     normalized = base.normalize_text(message.content)
     named_game = _match_game(message.content, products)
     named_product = _match_product(message.content, products)
+
+    remembered_robux = state.get("robux_amount")
+    if isinstance(remembered_robux, int) and remembered_robux > 0:
+        followup = _robux_followup_answer(normalized, remembered_robux)
+        if followup is not None:
+            return {
+                "intent": "store_question",
+                "multiple_requests": False,
+                "reply": followup,
+                "emoji_name": None,
+            }
 
     if normalized in _STOCK_QUESTIONS:
         return {
@@ -503,6 +548,7 @@ async def _general_answer(
         "conversation_context": {
             "game_name": state.get("game_name"),
             "product_name": state.get("product_name"),
+            "robux_amount": state.get("robux_amount"),
             "last_intent": state.get("intent"),
         },
         "catalog": base._snapshot(products),
@@ -540,6 +586,13 @@ async def _interpret(
     key = (message.guild.id, message.author.id)
     state = _get_state(self, key)
     self._provider_orders[message.guild.id] = list(provider_order)
+
+    detected_robux = _robux_amount(message.content)
+    if detected_robux is None:
+        detected_robux = _numeric_amount(message.content)
+    if detected_robux is not None:
+        state["robux_amount"] = detected_robux
+        state["created_at"] = time.monotonic()
 
     quick = _quick_store_answer(message, products, state)
     if quick is not None:
