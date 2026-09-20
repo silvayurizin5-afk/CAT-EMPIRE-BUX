@@ -89,6 +89,16 @@ async def sync_customer_roles(member: discord.Member) -> None:
 
         if profile.total_spent > 0 and customer_role is not None and customer_role not in member.roles:
             await member.add_roles(customer_role, reason="NEXTBUY: cliente com compra confirmada")
+        elif (
+            profile.total_spent <= 0
+            and customer_role is not None
+            and customer_role in member.roles
+            and _can_manage_role(member, customer_role)
+        ):
+            await member.remove_roles(
+                customer_role,
+                reason="NEXTBUY: economia do cliente zerada",
+            )
 
         if newly_reached and target_tier is not None:
             text = target_tier.dm_message.strip() or (
