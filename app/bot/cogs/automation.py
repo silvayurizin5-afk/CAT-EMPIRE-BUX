@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.bot.checks import can_admin
 from app.bot.components_v2 import CardLayout, format_percent, strip_generic_emoji
+from app.core.guild_guard import is_store_guild
 from app.db.models import Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
