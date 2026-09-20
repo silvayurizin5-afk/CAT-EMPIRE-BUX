@@ -17,8 +17,12 @@ from app.services.catalog import (
 )
 
 
+def _normalize_product_type_value(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 def _normalized_product_type(product: Product) -> str:
-    return str(product.product_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return _normalize_product_type_value(product.product_type)
 
 
 def _is_gamepass(product: Product) -> bool:
@@ -282,13 +286,25 @@ class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux do produto"
                     )
                     if not same_product:
                         continue
-                    if item_metadata.get("robux_amount") not in (None, "", 0, "0"):
-                        continue
-                    item_metadata["robux_amount"] = amount
-                    item_metadata.setdefault("product_type", product.product_type)
-                    item_metadata.setdefault("product_slug", product.slug)
-                    item.metadata_json = item_metadata
-                    backfilled += 1
+
+                    changed = False
+                    if item_metadata.get("robux_amount") in (None, "", 0, "0"):
+                        item_metadata["robux_amount"] = amount
+                        changed = True
+
+                    if _normalize_product_type_value(
+                        item_metadata.get("product_type")
+                    ) not in {"robux", "gamepass", "game_pass"}:
+                        item_metadata["product_type"] = product.product_type
+                        changed = True
+
+                    if not item_metadata.get("product_slug"):
+                        item_metadata["product_slug"] = product.slug
+                        changed = True
+
+                    if changed:
+                        item.metadata_json = item_metadata
+                        backfilled += 1
 
             await session.flush()
 
