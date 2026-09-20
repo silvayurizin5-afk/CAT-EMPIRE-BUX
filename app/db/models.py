@@ -251,6 +251,7 @@ class TermsDocument(Base, TimestampMixin):
     code: Mapped[str] = mapped_column(String(60))
     title: Mapped[str] = mapped_column(String(120))
     content: Mapped[str] = mapped_column(Text)
+    ephemeral_message: Mapped[str] = mapped_column(Text, default="", server_default="")
     emoji: Mapped[str | None] = mapped_column(String(128))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
