@@ -44,6 +44,43 @@ class User(Base, TimestampMixin):
     )
 
 
+class UserEconomyAdjustment(Base, TimestampMixin):
+    __tablename__ = "user_economy_adjustments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    spent_adjustment: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2),
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0",
+    )
+    robux_adjustment: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    orders_adjustment: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "guild_id",
+            "user_id",
+            name="uq_user_economy_adjustments_guild_user",
+        ),
+    )
+
+
 class Wallet(Base, TimestampMixin):
     __tablename__ = "wallets"
 
