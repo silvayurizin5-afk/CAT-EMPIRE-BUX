@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from app.bot.cogs.delivery_runtime import (
+    _configured_delivery_banner,
     _emoji_image_url,
     _inline_emoji_from_asset,
     _normalize_emoji,
@@ -106,3 +107,31 @@ def test_regular_image_excludes_discord_emoji_urls() -> None:
 def test_http_game_icon_is_valid_image_fallback() -> None:
     url = "https://example.com/blox-fruits.png"
     assert _emoji_image_url(url) == url
+
+
+
+def test_delivery_banner_is_static_local_by_default() -> None:
+    banner_file, banner_url = _configured_delivery_banner(None)
+    assert banner_file is not None
+    assert banner_url == "attachment://nextbuy-entrega.png"
+    banner_file.close()
+
+
+def test_delivery_banner_can_be_disabled() -> None:
+    banner_file, banner_url = _configured_delivery_banner(
+        {"banner_enabled": False}
+    )
+    assert banner_file is None
+    assert banner_url is None
+
+
+def test_delivery_banner_can_use_custom_url() -> None:
+    banner_file, banner_url = _configured_delivery_banner(
+        {
+            "banner_enabled": True,
+            "banner_source": "url",
+            "banner_url": "https://example.com/banner.gif",
+        }
+    )
+    assert banner_file is None
+    assert banner_url == "https://example.com/banner.gif"
