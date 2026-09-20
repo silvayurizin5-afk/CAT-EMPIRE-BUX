@@ -1,6 +1,7 @@
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from app.bot.views.manual_pix import TicketStaffContainerLayout, restore_manual_pix_views
@@ -11,6 +12,7 @@ from app.bot.workflows.feedback_permissions import (
     sync_feedback_channel_permissions,
 )
 from app.core.config import settings
+from app.core.guild_guard import STORE_GUILD_ID, is_store_guild
 from app.db.session import SessionLocal
 from app.services.ai_gateway import available_providers
 
@@ -18,12 +20,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class StoreOnlyCommandTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if is_store_guild(interaction.guild_id):
+            return True
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Este bot é exclusivo do servidor oficial da NEXTBUY.",
+                ephemeral=True,
+            )
+        return False
+
+
 class NextBuyBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
-        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        super().__init__(
+            command_prefix=commands.when_mentioned,
+            intents=intents,
+            tree_cls=StoreOnlyCommandTree,
+        )
         self._feedback_permissions_synced = False
 
     async def _restore_ticket_views(self) -> None:
@@ -57,14 +75,17 @@ class NextBuyBot(commands.Bot):
         await self._restore_ticket_views()
         await restore_manual_pix_views(self)
         await restore_store_panel_views(self)
-        if settings.discord_guild_id:
-            guild = discord.Object(id=settings.discord_guild_id)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            logger.info("Comandos sincronizados no servidor de desenvolvimento %s", guild.id)
-        else:
-            await self.tree.sync()
-            logger.info("Comandos globais sincronizados")
+        official_guild = discord.Object(id=STORE_GUILD_ID)
+        self.tree.copy_global_to(guild=official_guild)
+        await self.tree.sync(guild=official_guild)
+
+        # Remove comandos globais para que não apareçam/funcionem em outros servidores.
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync()
+        logger.info(
+            "Comandos sincronizados exclusivamente no servidor oficial %s",
+            STORE_GUILD_ID,
+        )
 
 
 bot = NextBuyBot()
@@ -73,6 +94,23 @@ bot = NextBuyBot()
 @bot.event
 async def on_ready() -> None:
     logger.info("NEXTBUY online como %s", bot.user)
+
+    for guild in list(bot.guilds):
+        if is_store_guild(guild.id):
+            continue
+        logger.warning(
+            "Servidor não autorizado detectado (%s - %s). Saindo automaticamente.",
+            guild.name,
+            guild.id,
+        )
+        try:
+            await guild.leave()
+        except discord.HTTPException as exc:
+            logger.warning(
+                "Não foi possível sair do servidor não autorizado %s: %s",
+                guild.id,
+                exc,
+            )
 
     providers = available_providers()
     if providers:
@@ -89,6 +127,8 @@ async def on_ready() -> None:
     if bot._feedback_permissions_synced:
         return
     for guild in bot.guilds:
+        if not is_store_guild(guild.id):
+            continue
         try:
             await sync_feedback_channel_permissions(guild)
         except FeedbackPermissionSyncError as exc:
@@ -98,6 +138,21 @@ async def on_ready() -> None:
                 exc,
             )
     bot._feedback_permissions_synced = True
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild) -> None:
+    if is_store_guild(guild.id):
+        return
+    logger.warning(
+        "Convite bloqueado: servidor %s (%s) não é o servidor oficial.",
+        guild.name,
+        guild.id,
+    )
+    try:
+        await guild.leave()
+    except discord.HTTPException as exc:
+        logger.warning("Falha ao sair do servidor não autorizado %s: %s", guild.id, exc)
 
 
 def run() -> None:
