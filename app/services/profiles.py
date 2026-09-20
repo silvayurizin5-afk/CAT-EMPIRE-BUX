@@ -371,7 +371,7 @@ async def set_user_economy_target(
         session.add(adjustment)
 
     adjustment.spent_adjustment = money(target_spent - base.total_spent)
-    # Legacy column is retained for schema compatibility; Robux always derives from BRL.
+    # O ajuste manual de R$ não altera Robux; Robux vem das compras elegíveis.
     adjustment.robux_adjustment = 0
     adjustment.orders_adjustment = int(completed_orders - base.completed_orders)
     await session.flush()
