@@ -45,7 +45,9 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             config.product_placeholder = str(self.placeholder).strip() or "Selecione um produto"
-            config.product_count_label = str(self.product_count).strip()
+            config.product_count_label = resolve_guild_emoji_aliases(
+                str(self.product_count).strip(), interaction.guild
+            )
 
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
