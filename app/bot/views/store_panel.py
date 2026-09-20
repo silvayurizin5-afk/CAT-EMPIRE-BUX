@@ -247,7 +247,7 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
             description=config.checkout_description or None,
             lines=lines,
             footer=config.footer_text or None,
-            accent_colour=_accent(config),
+            accent_colour=0x7B2CBF,
             image_url=_product_image_url(product),
             timeout=300,
         )
@@ -524,7 +524,7 @@ class StorePanelLayout(discord.ui.LayoutView):
             description=description,
             lines=lines,
             footer=footer or None,
-            accent_colour=_accent(config),
+            accent_colour=0x7B2CBF,
             image_url=banner_url if banner_url is not None else config.image_url,
             thumbnail_url=config.thumbnail_url,
             timeout=timeout,
