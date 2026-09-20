@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from decimal import Decimal
 import re
+from decimal import Decimal
 from typing import Any
 
 from app.services.calculator import format_brl
