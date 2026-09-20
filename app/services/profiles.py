@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,6 +83,29 @@ def _robux_from_name(value: object) -> int:
     return int(digits) if digits else 0
 
 
+def _robux_equivalent_from_brl(value: object, *, quantity: int = 1) -> int:
+    """Converte preço em R$ para Robux usando R$ 2,90 = 100 Robux.
+
+    O cálculo usa o preço histórico do item e arredonda para baixo porque
+    Robux é inteiro e o ranking não deve creditar mais Robux do que o valor
+    pago/configurado representa.
+    """
+
+    try:
+        price = Decimal(str(value))
+        safe_quantity = max(1, int(quantity or 1))
+    except (InvalidOperation, TypeError, ValueError):
+        return 0
+
+    if not price.is_finite() or price <= 0:
+        return 0
+
+    equivalent = (
+        price * Decimal(safe_quantity) * Decimal("100") / ROBUX_PRICE_PER_100
+    )
+    return int(equivalent.to_integral_value(rounding=ROUND_DOWN))
+
+
 def _robux_from_order_item(
     metadata: dict | None,
     *,
@@ -93,11 +116,11 @@ def _robux_from_order_item(
     unit_price: object | None = None,
     current_product_price: object | None = None,
 ) -> int:
-    """Conta Robux de Game Pass e compras diretas de Robux.
+    """Calcula os Robux do ranking conforme o tipo real da compra.
 
-    A prioridade é sempre o snapshot histórico. Para pedidos antigos, o cálculo
-    consegue recuperar dados pelo produto atual, pela cotação congelada, pelo
-    nome do item e, por último, pelo preço normal de Robux da NEXTBUY.
+    - Robux direto: usa a quantidade exata comprada.
+    - Game Pass: converte o preço em R$ pela regra R$ 2,90 = 100 Robux.
+    - Item/conta/outros tipos: não adicionam Robux.
     """
 
     snapshot = dict(metadata or {})
@@ -106,31 +129,38 @@ def _robux_from_order_item(
         snapshot.get("product_type") or current_product_type
     )
 
-    # Um tipo explícito como "item" sempre vence qualquer metadata ruim antiga:
-    # itens comuns jamais entram no total de Robux.
+    # Tipo explícito que não seja Robux/Game Pass nunca contabiliza Robux.
+    # Isso cobre item, conta/account e qualquer outro produto comum.
     if product_type and product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
         return 0
 
-    # Pedidos antigos de Robux por cotação nem sempre gravavam product_type.
-    # Só aplicamos heurísticas quando o tipo realmente está ausente.
+    # Recuperação de pedidos antigos sem product_type.
     if not product_type:
-        if snapshot.get("robux_amount") not in {None, "", 0, "0"}:
-            product_type = "robux"
-        elif snapshot.get("price_per_robux") not in {None, "", 0, "0"}:
+        if snapshot.get("price_per_robux") not in {None, "", 0, "0"}:
             product_type = "robux"
         elif _robux_from_name(item_name) > 0:
+            product_type = "robux"
+        elif snapshot.get("robux_amount") not in {None, "", 0, "0"}:
             product_type = "robux"
 
     if product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
         return 0
 
+    # Game Pass: o ranking NÃO usa robux_amount manual. O equivalente vem do
+    # preço em reais congelado no pedido; só cai para o preço atual se o pedido
+    # legado não tiver unit_price.
+    if product_type in {"gamepass", "game_pass"}:
+        price = unit_price if unit_price not in {None, ""} else current_product_price
+        return _robux_equivalent_from_brl(price, quantity=quantity)
+
+    # Robux direto: usa primeiro a quantidade exata congelada no pedido.
     raw_amount = snapshot.get("robux_amount")
     if raw_amount in {None, "", 0, "0"}:
         raw_amount = current_metadata.get("robux_amount")
     amount = _positive_int(raw_amount)
 
-    if amount <= 0 and product_type == "robux":
-        # Cotação histórica é a reconstrução mais fiel para pedidos diretos.
+    # Pedidos diretos antigos podem ter apenas a cotação histórica.
+    if amount <= 0:
         raw_rate = snapshot.get("price_per_robux")
         if raw_rate not in {None, "", 0, "0"} and unit_price not in {None, ""}:
             try:
@@ -142,18 +172,13 @@ def _robux_from_order_item(
             if inferred > 0 and inferred == inferred.to_integral_value():
                 amount = int(inferred)
 
-    if amount <= 0 and product_type == "robux":
+    if amount <= 0:
         amount = _robux_from_name(item_name)
 
-    if amount <= 0 and product_type == "robux":
-        raw_price = unit_price if unit_price not in {None, ""} else current_product_price
-        try:
-            price = Decimal(str(raw_price))
-            inferred = price * Decimal("100") / ROBUX_PRICE_PER_100
-        except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
-            inferred = Decimal("0")
-        if inferred > 0 and inferred == inferred.to_integral_value():
-            amount = int(inferred)
+    # Último fallback para produtos Robux antigos sem snapshot da quantidade.
+    if amount <= 0:
+        price = unit_price if unit_price not in {None, ""} else current_product_price
+        amount = _robux_equivalent_from_brl(price, quantity=1)
 
     if amount <= 0:
         return 0
