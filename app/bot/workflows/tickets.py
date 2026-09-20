@@ -122,10 +122,10 @@ async def _save_ticket_transcript(
     transcript = await render_channel_transcript(channel)
     file = discord.File(
         io.BytesIO(transcript),
-        filename=f"transcript-{str(order_id)[:8]}.html",
+        filename="transcript-ticket.html",
     )
     await target.send(
-        content=f"Transcript do pedido `{str(order_id)[:8]}` • canal {channel.name}",
+        content=f"Transcript do ticket **{channel.name}**",
         file=file,
     )
     return True
@@ -482,10 +482,10 @@ class FeedbackModal(discord.ui.Modal, title="Avaliar compra"):
                     customer_name=interaction.user.display_name,
                     stars=feedback.stars,
                     comment=feedback.comment,
-                    order_short_id=str(self.order_id)[:8],
+                    order_short_id="",
                     avatar_bytes=avatar_bytes,
                 )
-                filename = f"feedback-{str(self.order_id)[:8]}.png"
+                filename = "feedback.png"
                 file = discord.File(io.BytesIO(card_bytes), filename=filename)
                 published = await channel.send(
                     view=CardLayout(
