@@ -16,6 +16,7 @@ from app.services.delivery_settings import (
     effective_delivery_config,
     parse_hex_color,
     product_line_values,
+    sanitize_private_order_artifacts,
 )
 
 _CUSTOM_EMOJI_RE = re.compile(r"<(?P<animated>a?):[^:>]+:(?P<id>\d+)>")
@@ -277,12 +278,18 @@ def _render_delivery_sections(
     common = _common_values(config, order_id, client_mention)
     blocks = _render_product_blocks(config, common, items)
 
-    title = _format_template(str(config["title_template"]), common).strip()
-    body_with_marker = _format_template(
-        str(config["body_template"]),
-        {**common, "products": _PRODUCTS_MARKER},
-    ).strip()
-    footer = _format_template(str(config["footer_template"]), common).strip()
+    title = sanitize_private_order_artifacts(
+        _format_template(str(config["title_template"]), common)
+    )
+    body_with_marker = sanitize_private_order_artifacts(
+        _format_template(
+            str(config["body_template"]),
+            {**common, "products": _PRODUCTS_MARKER},
+        )
+    )
+    footer = sanitize_private_order_artifacts(
+        _format_template(str(config["footer_template"]), common)
+    )
 
     if _PRODUCTS_MARKER in body_with_marker:
         before, after = body_with_marker.split(_PRODUCTS_MARKER, 1)
