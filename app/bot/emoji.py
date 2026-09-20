@@ -5,6 +5,26 @@ import discord
 _CUSTOM_EMOJI_RE = re.compile(
     r"^<(?P<animated>a?):(?P<name>[A-Za-z0-9_]{1,32}):(?P<id>[0-9]{15,22})>$"
 )
+_EMOJI_ALIAS_RE = re.compile(r"(?<!<):(?P<name>[A-Za-z0-9_]{1,32}):(?![0-9])")
+
+
+def resolve_guild_emoji_aliases(value: str, guild: discord.Guild | None) -> str:
+    """Troca :nome_do_emoji: pelo mention real do emoji do servidor.
+
+    Mentions já válidos (<:nome:id>/<a:nome:id>) são preservados. Nomes não
+    encontrados também são preservados para o admin perceber o erro de digitação.
+    """
+    text = str(value or "")
+    if not text or guild is None:
+        return text
+
+    emojis = {emoji.name.casefold(): str(emoji) for emoji in guild.emojis}
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group("name")
+        return emojis.get(name.casefold(), match.group(0))
+
+    return _EMOJI_ALIAS_RE.sub(replace, text)
 
 
 def select_option_emoji(value: str | None) -> discord.PartialEmoji | str | None:
