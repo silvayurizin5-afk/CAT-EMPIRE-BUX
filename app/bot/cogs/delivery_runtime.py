@@ -4,7 +4,8 @@ from pathlib import Path
 import discord
 from sqlalchemy import select
 
-from app.bot.components_v2 import DEFAULT_ACCENT\nfrom app.bot.workflows import tickets
+from app.bot.components_v2 import DEFAULT_ACCENT
+from app.bot.workflows import tickets
 from app.db.models import Order, Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
