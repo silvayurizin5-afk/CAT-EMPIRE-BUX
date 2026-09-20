@@ -85,6 +85,10 @@ DEFAULT_DELIVERY_CONFIG: dict[str, object] = {
     "footer_template": "",
     "accent_color": "#23A55A",
     "show_image": True,
+    "banner_enabled": True,
+    "banner_source": "local",
+    "banner_mode": "static",
+    "banner_url": "",
     "delivery_emoji": VERIFY_EMOJI,
     "arrow_emoji": ARROW_EMOJI,
     "user_emoji": MEMBER_EMOJI,
@@ -242,6 +246,19 @@ def validate_delivery_templates(config: dict[str, object]) -> None:
     _format(str(config.get("product_template") or ""), values)
     _format(str(config.get("footer_template") or ""), values)
     parse_hex_color(config.get("accent_color"))
+
+    banner_source = str(config.get("banner_source") or "local").strip().casefold()
+    if banner_source not in {"local", "url"}:
+        raise ValueError("A fonte do banner deve ser `local` ou `url`.")
+
+    banner_mode = str(config.get("banner_mode") or "static").strip().casefold()
+    if banner_mode not in {"static", "animated"}:
+        raise ValueError("O modo do banner deve ser `static` ou `animated`.")
+
+    banner_url = str(config.get("banner_url") or "").strip()
+    if banner_source == "url" and banner_url:
+        if not banner_url.lower().startswith(("http://", "https://")):
+            raise ValueError("A URL do banner deve começar com http:// ou https://.")
 
 
 def product_line_values(item, config: dict[str, object] | None = None) -> dict[str, object]:
