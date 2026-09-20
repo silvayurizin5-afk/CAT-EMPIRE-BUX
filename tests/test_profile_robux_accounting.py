@@ -3,23 +3,73 @@ from decimal import Decimal
 from app.services.profiles import _robux_from_order_item
 
 
-def test_direct_robux_purchase_updates_robux_total() -> None:
+def test_direct_robux_purchase_uses_exact_purchased_amount() -> None:
     assert (
         _robux_from_order_item(
-            {"product_type": "robux", "robux_amount": 1000},
+            {"product_type": "robux", "robux_amount": 1375},
             quantity=1,
+            unit_price=Decimal("39.875"),
         )
-        == 1000
+        == 1375
     )
 
 
-def test_gamepass_updates_robux_total_and_respects_quantity() -> None:
+def test_gamepass_uses_brl_price_not_manual_robux_metadata() -> None:
     assert (
         _robux_from_order_item(
             {"product_type": "gamepass", "robux_amount": 2200},
-            quantity=2,
+            quantity=1,
+            unit_price=Decimal("2.90"),
         )
-        == 4400
+        == 100
+    )
+
+
+def test_gamepass_brl_conversion_respects_quantity() -> None:
+    assert (
+        _robux_from_order_item(
+            {"product_type": "gamepass"},
+            quantity=2,
+            unit_price=Decimal("2.90"),
+        )
+        == 200
+    )
+
+
+def test_gamepass_brl_conversion_rounds_down_to_whole_robux() -> None:
+    assert (
+        _robux_from_order_item(
+            {"product_type": "gamepass", "robux_amount": 9999},
+            quantity=1,
+            unit_price=Decimal("22.00"),
+        )
+        == 758
+    )
+
+
+def test_legacy_gamepass_can_fall_back_to_current_configured_brl_price() -> None:
+    assert (
+        _robux_from_order_item(
+            {"product_type": "gamepass"},
+            quantity=1,
+            current_product_type="gamepass",
+            current_product_metadata={"robux_amount": 2200},
+            current_product_price=Decimal("5.80"),
+        )
+        == 200
+    )
+
+
+def test_legacy_order_without_snapshot_type_uses_current_gamepass_brl_price() -> None:
+    assert (
+        _robux_from_order_item(
+            {},
+            quantity=1,
+            current_product_type="game_pass",
+            current_product_metadata={"robux_amount": 450},
+            current_product_price=Decimal("4.35"),
+        )
+        == 150
     )
 
 
@@ -28,32 +78,31 @@ def test_item_never_updates_robux_total() -> None:
         _robux_from_order_item(
             {"product_type": "item", "robux_amount": 9999},
             quantity=3,
+            unit_price=Decimal("29.00"),
         )
         == 0
     )
 
 
-def test_old_gamepass_order_can_use_current_product_robux_value() -> None:
+def test_account_never_updates_robux_total() -> None:
     assert (
         _robux_from_order_item(
-            {"product_type": "gamepass"},
+            {"product_type": "account", "robux_amount": 9999},
             quantity=1,
-            current_product_type="gamepass",
-            current_product_metadata={"robux_amount": 2200},
+            unit_price=Decimal("100.00"),
         )
-        == 2200
+        == 0
     )
 
 
-def test_legacy_order_without_type_can_fall_back_to_current_gamepass() -> None:
+def test_conta_never_updates_robux_total() -> None:
     assert (
         _robux_from_order_item(
-            {},
+            {"product_type": "conta"},
             quantity=1,
-            current_product_type="game_pass",
-            current_product_metadata={"robux_amount": 450},
+            unit_price=Decimal("100.00"),
         )
-        == 450
+        == 0
     )
 
 
