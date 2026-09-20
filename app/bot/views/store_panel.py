@@ -7,7 +7,7 @@ import discord
 from sqlalchemy import select
 
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row, format_percent
-from app.bot.emoji import select_option_emoji
+from app.bot.emoji import resolve_guild_emoji_aliases, select_option_emoji
 from app.bot.views.manual_pix import open_manual_pix_ticket
 from app.bot.views.terms_gate import require_current_terms
 from app.core.money import money
@@ -61,21 +61,32 @@ def _product_image_url(product: Product) -> str | None:
     return value
 
 
-def build_store_panel_embed(config: StorePanelConfig, product_count: int) -> discord.Embed:
-    """Prévia legada usada apenas pelo painel administrativo durante a migração V2."""
+def build_store_panel_embed(
+    config: StorePanelConfig,
+    product_count: int,
+    guild: discord.Guild | None = None,
+) -> discord.Embed:
+    """Prévia administrativa; resolve :emoji: usando os emojis do servidor."""
+    title = resolve_guild_emoji_aliases(config.title or "NEXTBUY", guild)
+    description = resolve_guild_emoji_aliases(
+        config.description or "Selecione um produto abaixo.", guild
+    )
+    footer = resolve_guild_emoji_aliases(config.footer_text or "", guild)
+    count_label = resolve_guild_emoji_aliases(config.product_count_label or "", guild)
+
     embed = discord.Embed(
-        title=config.title or "NEXTBUY",
-        description=config.description or "Selecione um produto abaixo.",
+        title=title,
+        description=description,
         color=config.color,
     )
-    if config.product_count_label:
-        embed.add_field(name=config.product_count_label, value=str(product_count), inline=False)
+    if count_label:
+        embed.add_field(name=count_label, value=str(product_count), inline=False)
     if config.image_url:
         embed.set_image(url=config.image_url)
     if config.thumbnail_url:
         embed.set_thumbnail(url=config.thumbnail_url)
-    if config.footer_text:
-        embed.set_footer(text=config.footer_text)
+    if footer:
+        embed.set_footer(text=footer)
     return embed
 
 
@@ -93,9 +104,15 @@ def build_store_panel_card(
     config: StorePanelConfig,
     products: list[Product],
     *,
+    guild: discord.Guild | None = None,
     timeout: float | None = None,
 ) -> "StorePanelLayout":
-    return StorePanelLayout(config=config, products=products, timeout=timeout)
+    return StorePanelLayout(
+        config=config,
+        products=products,
+        guild=guild,
+        timeout=timeout,
+    )
 
 
 def build_product_checkout_card(
@@ -477,17 +494,25 @@ class StorePanelLayout(discord.ui.LayoutView):
         *,
         config: StorePanelConfig,
         products: list[Product],
+        guild: discord.Guild | None = None,
         timeout: float | None = None,
     ) -> None:
         super().__init__(timeout=timeout)
+        title = resolve_guild_emoji_aliases(config.title or "NEXTBUY", guild)
+        description = resolve_guild_emoji_aliases(
+            config.description or "Selecione um produto abaixo.", guild
+        )
+        footer = resolve_guild_emoji_aliases(config.footer_text or "", guild)
+        count_label = resolve_guild_emoji_aliases(config.product_count_label or "", guild)
+
         lines: list[str] = []
-        if config.product_count_label:
-            lines.append(f"**{config.product_count_label}:** `{len(products)}`")
+        if count_label:
+            lines.append(f"**{count_label}:** `{len(products)}`")
         card = CardLayout(
-            title=config.title or "NEXTBUY",
-            description=config.description or "Selecione um produto abaixo.",
+            title=title,
+            description=description,
             lines=lines,
-            footer=config.footer_text or None,
+            footer=footer or None,
             accent_colour=_accent(config),
             image_url=config.image_url,
             thumbnail_url=config.thumbnail_url,
@@ -515,7 +540,12 @@ async def publish_store_panel(
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, interaction.guild.id)
         products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
-        view = build_store_panel_card(config, products, timeout=None)
+        view = build_store_panel_card(
+            config,
+            products,
+            guild=interaction.guild,
+            timeout=None,
+        )
 
         message: discord.Message | None = None
         if config.published_channel_id and config.published_message_id:
@@ -544,7 +574,12 @@ async def refresh_published_store_panel(guild: discord.Guild) -> bool:
         if config is None or not config.published_channel_id or not config.published_message_id:
             return False
         products = await list_store_products(session, guild_id=guild.id, config=config)
-        view = build_store_panel_card(config, products, timeout=None)
+        view = build_store_panel_card(
+            config,
+            products,
+            guild=guild,
+            timeout=None,
+        )
         channel_id = config.published_channel_id
         message_id = config.published_message_id
 
@@ -576,7 +611,13 @@ async def restore_store_panel_views(bot: discord.Client) -> None:
                 guild_id=config.guild_id,
                 config=config,
             )
+            guild = bot.get_guild(config.guild_id)
             bot.add_view(
-                build_store_panel_card(config, products, timeout=None),
+                build_store_panel_card(
+                    config,
+                    products,
+                    guild=guild,
+                    timeout=None,
+                ),
                 message_id=config.published_message_id,
             )
