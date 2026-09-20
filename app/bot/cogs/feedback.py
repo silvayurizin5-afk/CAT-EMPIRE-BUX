@@ -81,15 +81,14 @@ class FeedbackCog(commands.Cog):
         if pending is None:
             if order_prefix:
                 guidance = (
-                    "Não achei um único pedido pendente com esse código. "
-                    "Confira os 8 primeiros caracteres do ID do pedido."
+                    "Não consegui relacionar essa avaliação a uma compra pendente. "
+                    "Use o botão de avaliação disponível no atendimento correspondente."
                 )
             else:
-                examples = ", ".join(f"`#{str(row[0].id)[:8]}`" for row in pending_rows[:5])
-                first_short_id = str(pending_rows[0][0].id)[:8]
                 guidance = (
-                    "Você tem mais de uma avaliação pendente. Informe o pedido, por exemplo: "
-                    f"`5 #{first_short_id} - ótimo atendimento`. Pendentes: {examples}."
+                    "Você tem mais de uma avaliação pendente. "
+                    "Use o botão de avaliação no atendimento correspondente para garantir "
+                    "que o feedback seja associado à compra correta."
                 )
             try:
                 await message.reply(guidance, mention_author=False, delete_after=25)
