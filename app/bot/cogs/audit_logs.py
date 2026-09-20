@@ -18,6 +18,10 @@ from app.services.audit import (
 logger = logging.getLogger(__name__)
 
 _ACTIONS: dict[str, tuple[str, str]] = {
+    "pix.payment_ticket.open": (
+        "Ticket de pagamento PIX aberto",
+        "Um canal privado de pagamento PIX foi criado.",
+    ),
     "order.payment_confirmed_manual_pix": (
         "Pagamento PIX confirmado",
         "O pagamento foi confirmado manualmente pela equipe.",
@@ -143,6 +147,7 @@ async def _load_order_context(
 
     member = guild.get_member(user.discord_user_id)
     display_name = member.display_name if member is not None else "Usuário"
+    account_created_at = int(discord.utils.snowflake_time(user.discord_user_id).timestamp())
     products = [
         f"{order_item.name_snapshot} × {order_item.quantity}"
         for order_item in items
@@ -150,6 +155,7 @@ async def _load_order_context(
     return {
         "customer_id": user.discord_user_id,
         "customer_name": display_name,
+        "account_created_at": account_created_at,
         "products": products,
         "total": order.total_credits,
         "status": order.status,
@@ -194,9 +200,16 @@ def build_audit_embed(
         products = list(order_context.get("products") or [])
         channel_id = order_context.get("channel_id")
         channel_text = f"<#{channel_id}>" if channel_id else "Canal já removido"
+        created_at = int(order_context.get("account_created_at") or 0)
+        user_lines = [
+            f"<@{customer_id}> `{customer_name} ({customer_id})`",
+            f"**ID:** `{customer_id}`",
+        ]
+        if created_at:
+            user_lines.append(f"**Conta criada em:** <t:{created_at}:F>")
         embed.add_field(
             name="Usuário",
-            value=f"<@{customer_id}> `{customer_name} ({customer_id})`",
+            value="\n".join(user_lines)[:1024],
             inline=False,
         )
         detail_lines = [
