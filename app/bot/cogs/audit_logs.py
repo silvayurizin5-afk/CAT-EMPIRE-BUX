@@ -48,6 +48,18 @@ _ACTIONS: dict[str, tuple[str, str]] = {
         "Ticket excluído",
         "O canal do ticket foi excluído permanentemente.",
     ),
+    "economy.configure": (
+        "Economia configurada",
+        "Os valores de economia de um usuário foram ajustados manualmente.",
+    ),
+    "economy.reset": (
+        "Economia zerada",
+        "R$, Robux e compras contabilizadas do usuário foram zerados.",
+    ),
+    "economy.restore_automatic": (
+        "Economia automática restaurada",
+        "Os ajustes manuais foram removidos e o histórico real voltou a ser usado.",
+    ),
 }
 
 _DETAIL_LABELS = {
