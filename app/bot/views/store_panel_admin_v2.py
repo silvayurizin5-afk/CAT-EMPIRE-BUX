@@ -56,7 +56,7 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
                 guild_id=interaction.guild.id,
                 config=config,
             )
-            embed = build_store_panel_embed(config, len(products))
+            embed = build_store_panel_embed(config, len(products), interaction.guild)
         await interaction.edit_original_response(
             content="Controles atualizados.",
             embed=embed,
@@ -131,7 +131,7 @@ class StoreAppearanceModalV2(discord.ui.Modal, title="Visual da loja"):
                 guild_id=interaction.guild.id,
                 config=config,
             )
-            embed = build_store_panel_embed(config, len(products))
+            embed = build_store_panel_embed(config, len(products), interaction.guild)
 
         await interaction.edit_original_response(
             content=(
@@ -185,7 +185,7 @@ class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
                 guild_id=interaction.guild.id,
                 config=config,
             )
-            embed = build_store_panel_embed(config, len(products))
+            embed = build_store_panel_embed(config, len(products), interaction.guild)
 
         await interaction.edit_original_response(
             content="Imagens atualizadas: foto do título e banner são independentes.",
@@ -377,7 +377,7 @@ async def send_store_panel_admin(interaction: discord.Interaction) -> None:
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, interaction.guild.id)
         products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
-        embed = build_store_panel_embed(config, len(products))
+        embed = build_store_panel_embed(config, len(products), interaction.guild)
     await interaction.response.send_message(
         content=(
             "Configure toda a loja por este seletor. A prévia administrativa abaixo mostra o "
