@@ -55,6 +55,10 @@ def reusable_banner_attachment_url(
     return None
 
 
+def is_gif_banner_url(url: str | None) -> bool:
+    return _looks_like_gif(url)
+
+
 def _looks_like_gif(url: str | None) -> bool:
     if not url:
         return False
