@@ -202,9 +202,6 @@ async def _adjusted_spend_rows(session: AsyncSession, guild_id: int):
                 func.coalesce(UserEconomyAdjustment.spent_adjustment, 0).label(
                     "spent_adjustment"
                 ),
-                func.coalesce(UserEconomyAdjustment.robux_adjustment, 0).label(
-                    "robux_adjustment"
-                ),
                 func.coalesce(UserEconomyAdjustment.orders_adjustment, 0).label(
                     "orders_adjustment"
                 ),
@@ -454,7 +451,6 @@ async def get_customer_profile(
     if user_economy is None:
         total_spent = ZERO
         completed_orders = 0
-        robux_adjustment = 0
     else:
         total_spent = max(
             ZERO,
@@ -468,7 +464,6 @@ async def get_customer_profile(
             int(user_economy["base_orders"])
             + int(user_economy["orders_adjustment"]),
         )
-        robux_adjustment = int(user_economy["robux_adjustment"])
 
     robux_by_user, item_rows = await _robux_totals_for_users(
         session,
@@ -476,7 +471,7 @@ async def get_customer_profile(
         user_ids=[user.id],
         newest_first=True,
     )
-    robux_purchased = max(0, robux_by_user.get(user.id, 0) + robux_adjustment)
+    robux_purchased = max(0, robux_by_user.get(user.id, 0))
 
     leaderboard_position: int | None = None
     if total_spent > ZERO or robux_purchased > 0:
@@ -543,10 +538,7 @@ async def list_leaderboard(
             0,
             int(row["base_orders"]) + int(row["orders_adjustment"]),
         )
-        robux_purchased = max(
-            0,
-            robux_by_user.get(user_id, 0) + int(row["robux_adjustment"]),
-        )
+        robux_purchased = max(0, robux_by_user.get(user_id, 0))
         if total_spent <= ZERO and robux_purchased <= 0 and completed_orders <= 0:
             continue
         entries.append(
