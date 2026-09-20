@@ -304,7 +304,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 title=None,
                 lines=([title] if title else []) + lines,
                 footer=footer or None,
-                accent_colour=accent,
+                accent_colour=0x7B2CBF,
             ),
             ephemeral=True,
         )
