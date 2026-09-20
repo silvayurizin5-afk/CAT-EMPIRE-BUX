@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from app.services.profiles import _robux_from_order_item
 
 
@@ -52,4 +54,37 @@ def test_legacy_order_without_type_can_fall_back_to_current_gamepass() -> None:
             current_product_metadata={"robux_amount": 450},
         )
         == 450
+    )
+
+
+def test_legacy_direct_robux_product_infers_amount_from_normal_price() -> None:
+    assert (
+        _robux_from_order_item(
+            {"product_type": "robux"},
+            quantity=1,
+            unit_price=Decimal("2.90"),
+        )
+        == 100
+    )
+
+
+def test_legacy_direct_robux_product_inference_respects_quantity() -> None:
+    assert (
+        _robux_from_order_item(
+            {"product_type": "robux"},
+            quantity=5,
+            unit_price=Decimal("2.90"),
+        )
+        == 500
+    )
+
+
+def test_explicit_direct_robux_amount_has_priority_over_price_inference() -> None:
+    assert (
+        _robux_from_order_item(
+            {"product_type": "robux", "robux_amount": 250},
+            quantity=2,
+            unit_price=Decimal("2.90"),
+        )
+        == 500
     )
