@@ -154,8 +154,12 @@ async def delete_order_ticket(
         try:
             fetched = await guild.fetch_channel(channel_id)
             channel = fetched if isinstance(fetched, discord.TextChannel) else None
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        except discord.NotFound:
             channel = None
+        except discord.Forbidden:
+            return False, "O bot não tem permissão para acessar esse canal."
+        except discord.HTTPException:
+            return False, "Não consegui consultar o canal no Discord."
 
     transcript_saved = False
     channel_name = f"canal-{channel_id}"
