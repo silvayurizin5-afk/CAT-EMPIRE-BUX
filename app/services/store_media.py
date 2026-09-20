@@ -13,7 +13,7 @@ from PIL import Image, ImageSequence
 
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _CACHE_SIZE = 4
-_CACHE: OrderedDict[tuple[str, int], "PreparedStoreBanner"] = OrderedDict()
+_CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
 
 
 class StoreBannerError(ValueError):
