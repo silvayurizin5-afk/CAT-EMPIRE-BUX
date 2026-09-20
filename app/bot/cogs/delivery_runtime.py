@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import discord
 from sqlalchemy import select
@@ -49,6 +50,9 @@ _THUMBNAIL_PRODUCT_TEMPLATE = (
     "{discount_line}"
 )
 _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
+_DELIVERY_BANNER_PATH = Path(__file__).resolve().parents[2] / "assets" / "delivery_banner.webp"
+_DELIVERY_BANNER_FILENAME = "nextbuy-entrega.webp"
+_DELIVERY_BANNER_URL = f"attachment://{_DELIVERY_BANNER_FILENAME}"
 
 
 def _delivery_image(items) -> str | None:
@@ -324,7 +328,7 @@ def _render_delivery(
 
 
 class DeliveryPublicLayout(discord.ui.LayoutView):
-    """Mensagem pública de entrega sem banner; imagens ficam como Thumbnail do produto."""
+    """Mensagem pública de entrega com banner fixo e thumbnails específicas dos produtos."""
 
     def __init__(
         self,
@@ -335,6 +339,7 @@ class DeliveryPublicLayout(discord.ui.LayoutView):
         after_lines: list[str],
         footer: str,
         accent: int,
+        banner_url: str | None = None,
     ) -> None:
         super().__init__(timeout=None)
         children: list[discord.ui.Item] = []
@@ -361,6 +366,9 @@ class DeliveryPublicLayout(discord.ui.LayoutView):
         if footer:
             children.append(discord.ui.Separator())
             children.append(discord.ui.TextDisplay(f"-# {footer}"))
+
+        if banner_url:
+            children.append(discord.ui.MediaGallery(discord.MediaGalleryItem(banner_url)))
 
         if not children:
             children.append(discord.ui.TextDisplay("\u200b"))
@@ -391,19 +399,35 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
         items=items,
     )
 
-    # Nunca enviar image_url/MediaGallery aqui. Imagens de jogo ficam somente como
-    # Thumbnail pequena no Section do produto correspondente.
-    message = await channel.send(
-        view=DeliveryPublicLayout(
+    banner_file: discord.File | None = None
+    banner_url: str | None = None
+    if _DELIVERY_BANNER_PATH.is_file():
+        banner_file = discord.File(
+            _DELIVERY_BANNER_PATH,
+            filename=_DELIVERY_BANNER_FILENAME,
+        )
+        banner_url = _DELIVERY_BANNER_URL
+
+    send_kwargs: dict[str, object] = {
+        "view": DeliveryPublicLayout(
             title=title,
             before_lines=before,
             product_blocks=blocks,
             after_lines=after,
             footer=footer,
             accent=accent,
+            banner_url=banner_url,
         ),
-        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-    )
+        "allowed_mentions": discord.AllowedMentions(
+            users=True,
+            roles=False,
+            everyone=False,
+        ),
+    }
+    if banner_file is not None:
+        send_kwargs["file"] = banner_file
+
+    message = await channel.send(**send_kwargs)
 
     async with SessionLocal() as session, session.begin():
         db_order = await session.get(Order, order.id)
