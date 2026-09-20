@@ -4,7 +4,7 @@ from pathlib import Path
 import discord
 from sqlalchemy import select
 
-from app.bot.workflows import tickets
+from app.bot.components_v2 import DEFAULT_ACCENT\nfrom app.bot.workflows import tickets
 from app.db.models import Order, Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
@@ -50,8 +50,8 @@ _THUMBNAIL_PRODUCT_TEMPLATE = (
     "{discount_line}"
 )
 _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
-_DELIVERY_BANNER_PATH = Path(__file__).resolve().parents[2] / "assets" / "delivery_banner.webp"
-_DELIVERY_BANNER_FILENAME = "nextbuy-entrega.webp"
+_DELIVERY_BANNER_PATH = Path(__file__).resolve().parents[2] / "assets" / "delivery_banner.gif"
+_DELIVERY_BANNER_FILENAME = "nextbuy-entrega.gif"
 _DELIVERY_BANNER_URL = f"attachment://{_DELIVERY_BANNER_FILENAME}"
 
 
@@ -373,7 +373,7 @@ class DeliveryPublicLayout(discord.ui.LayoutView):
         if not children:
             children.append(discord.ui.TextDisplay("\u200b"))
 
-        self.container = discord.ui.Container(*children, accent_colour=0x7B2CBF)
+        self.container = discord.ui.Container(*children, accent_colour=DEFAULT_ACCENT)
         self.add_item(self.container)
 
 
