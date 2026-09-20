@@ -7,7 +7,7 @@ from app.bot.views.embed_builder import send_embed_builder
 from app.bot.views.rank_admin import send_rank_tier_management
 from app.bot.views.store_panel_admin import send_store_panel_admin
 from app.bot.views.terms_admin import send_terms_management
-from app.bot.views.ticket_admin import TicketMessagesModal
+from app.bot.views.ticket_admin import TicketMessagesModal, send_ticket_management
 from app.db.session import SessionLocal
 from app.services.configs import get_or_create_guild_config
 from app.services.ticket_settings import get_effective_ticket_settings
@@ -32,6 +32,7 @@ ADMIN_ACTIONS = (
     ("embed_builder", "Criar mensagem visual", "Editor visual para mensagens do servidor"),
     ("feedback", "Configurar feedbacks", "Emoji e permissões do canal de avaliações"),
     ("ticket_messages", "Mensagens dos tickets", "Editar textos automáticos dos pedidos"),
+    ("manage_tickets", "Gerenciar tickets", "Consultar e excluir tickets fora do canal atual"),
     ("new_terms", "Criar ou atualizar termo", "Cadastrar uma nova versão de termo"),
     ("manage_terms", "Gerenciar termos", "Editar, ativar ou desativar termos"),
     ("new_rank", "Criar faixa de cliente", "Vincular faixa e cargo"),
@@ -150,6 +151,10 @@ class CompactAdminPanelView(discord.ui.LayoutView):
                     instruction_template=settings.instruction_template,
                 )
             )
+            return
+
+        if action == "manage_tickets":
+            await send_ticket_management(interaction)
             return
 
         if action == "new_terms":
