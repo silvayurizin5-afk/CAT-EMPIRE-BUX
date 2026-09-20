@@ -622,7 +622,12 @@ class AutomationCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None or not message.content.strip():
+        if (
+            message.author.bot
+            or message.guild is None
+            or not is_store_guild(message.guild.id)
+            or not message.content.strip()
+        ):
             return
         config, products, panel = await self._context(message.guild.id)
         allowed = {int(value) for value in (config.allowed_channel_ids or [])}
