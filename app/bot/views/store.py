@@ -112,7 +112,7 @@ class ConfirmPurchaseView(discord.ui.View):
         async with self._lock:
             if self._order_id is not None:
                 await interaction.edit_original_response(
-                    content=f"Essa compra já foi criada: `{str(self._order_id)[:8]}`.",
+                    content="Essa compra já foi criada. Consulte o atendimento correspondente.",
                     embed=None,
                     view=None,
                 )
@@ -158,7 +158,7 @@ class ConfirmPurchaseView(discord.ui.View):
         ticket_text = await _finish_paid_order(interaction, order.id)
         await interaction.edit_original_response(
             content=(
-                f"Compra confirmada. Pedido `{str(order.id)[:8]}` criado. "
+                "Compra confirmada. "
                 f"Atendimento: {ticket_text}."
             ),
             embed=None,
@@ -185,7 +185,7 @@ class ConfirmRobuxPurchaseView(discord.ui.View):
         async with self._lock:
             if self._order_id is not None:
                 await interaction.edit_original_response(
-                    content=f"Essa compra já foi criada: `{str(self._order_id)[:8]}`.",
+                    content="Essa compra já foi criada. Consulte o atendimento correspondente.",
                     embed=None,
                     view=None,
                 )
@@ -226,7 +226,7 @@ class ConfirmRobuxPurchaseView(discord.ui.View):
         await interaction.edit_original_response(
             content=(
                 f"Compra de **{self.robux} Robux** confirmada. "
-                f"Pedido `{str(order.id)[:8]}`. Atendimento: {ticket_text}."
+                f"Atendimento: {ticket_text}."
             ),
             embed=None,
             view=None,
