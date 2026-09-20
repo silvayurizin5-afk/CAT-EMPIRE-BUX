@@ -21,6 +21,7 @@ from app.services.pix import PixConfigError, validate_pix_config
 from app.services.store_media import (
     PreparedStoreBanner,
     StoreBannerError,
+    is_gif_banner_url,
     prepare_store_banner,
     reusable_banner_attachment_url,
 )
@@ -38,6 +39,7 @@ _EMOJI_CDN_RE = re.compile(
     r"^https?://(?:cdn|media)\.discordapp\.(?:com|net)/emojis/(\d+)\.(gif|png|webp)(?:\?.*)?$",
     re.IGNORECASE,
 )
+_BANNER_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 
 
 def _accent(config: StorePanelConfig) -> discord.Colour:
@@ -548,6 +550,83 @@ async def _prepare_store_banner_for_guild(
         return None
 
 
+async def _apply_store_banner_async(
+    guild: discord.Guild,
+    channel_id: int,
+    message_id: int,
+) -> None:
+    key = (guild.id, message_id)
+    try:
+        async with SessionLocal() as session, session.begin():
+            config = await session.scalar(
+                select(StorePanelConfig).where(StorePanelConfig.guild_id == guild.id)
+            )
+            if config is None:
+                return
+            products = await list_store_products(session, guild_id=guild.id, config=config)
+
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            message = await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+        reused_url = reusable_banner_attachment_url(config.image_url, message.attachments)
+        if reused_url is not None:
+            return
+
+        prepared = await _prepare_store_banner_for_guild(config, guild)
+        if prepared is None:
+            return
+
+        # Confere novamente se o banner configurado não mudou enquanto o GIF era processado.
+        async with SessionLocal() as session:
+            latest = await session.scalar(
+                select(StorePanelConfig).where(StorePanelConfig.guild_id == guild.id)
+            )
+            if latest is None or latest.image_url != config.image_url:
+                return
+
+        view = build_store_panel_card(
+            config,
+            products,
+            guild=guild,
+            banner_url=prepared.attachment_url,
+            timeout=None,
+        )
+        await message.edit(
+            content=None,
+            embeds=[],
+            attachments=[prepared.to_file()],
+            view=view,
+        )
+    except (discord.Forbidden, discord.HTTPException, StoreBannerError):
+        return
+    finally:
+        current = _BANNER_TASKS.get(key)
+        if current is asyncio.current_task():
+            _BANNER_TASKS.pop(key, None)
+
+
+def _schedule_store_banner_update(
+    guild: discord.Guild,
+    *,
+    channel_id: int,
+    message_id: int,
+) -> None:
+    key = (guild.id, message_id)
+    previous = _BANNER_TASKS.get(key)
+    if previous is not None and not previous.done():
+        previous.cancel()
+    task = asyncio.create_task(
+        _apply_store_banner_async(guild, channel_id, message_id),
+        name=f"nextbuy-store-banner-{guild.id}-{message_id}",
+    )
+    _BANNER_TASKS[key] = task
+
+
 async def load_store_panel_view(guild_id: int) -> tuple[StorePanelConfig, list[Product]]:
     async with SessionLocal() as session, session.begin():
         config = await get_or_create_store_panel(session, guild_id)
@@ -569,8 +648,6 @@ async def publish_store_panel(
         published_channel_id = config.published_channel_id
         published_message_id = config.published_message_id
 
-    # Caminho rápido: se o painel já possui o mesmo banner anexado,
-    # apenas reutiliza o attachment existente. Não baixa nem reenvia o GIF.
     existing_message: discord.Message | None = None
     if published_channel_id == channel.id and published_message_id:
         try:
@@ -599,50 +676,41 @@ async def publish_store_panel(
             )
             return existing_message
 
-    prepared_banner = await _prepare_store_banner_for_guild(config, guild)
-    banner_url = (
-        prepared_banner.attachment_url
-        if prepared_banner is not None
-        else config.image_url
-    )
+    # GIFs não bloqueiam mais a publicação: envia o painel primeiro e
+    # processa/anexa a mídia logo depois.
+    animated_banner = is_gif_banner_url(config.image_url)
+    immediate_banner_url = "" if animated_banner else config.image_url
     view = build_store_panel_card(
         config,
         products,
         guild=guild,
-        banner_url=banner_url,
+        banner_url=immediate_banner_url,
         timeout=None,
     )
 
-    message: discord.Message | None = existing_message
-    if message is not None:
-        if prepared_banner is not None:
-            await message.edit(
-                content=None,
-                embeds=[],
-                attachments=[prepared_banner.to_file()],
-                view=view,
-            )
-        else:
-            await message.edit(
-                content=None,
-                embeds=[],
-                attachments=[],
-                view=view,
-            )
+    if existing_message is not None:
+        await existing_message.edit(
+            content=None,
+            embeds=[],
+            attachments=[],
+            view=view,
+        )
+        message = existing_message
     else:
-        if prepared_banner is not None:
-            message = await channel.send(
-                file=prepared_banner.to_file(),
-                view=view,
-            )
-        else:
-            message = await channel.send(view=view)
+        message = await channel.send(view=view)
 
     async with SessionLocal() as session, session.begin():
         saved = await get_or_create_store_panel(session, guild.id)
         saved.published_channel_id = channel.id
         saved.published_message_id = message.id
         await session.flush()
+
+    if animated_banner:
+        _schedule_store_banner_update(
+            guild,
+            channel_id=channel.id,
+            message_id=message.id,
+        )
     return message
 
 
