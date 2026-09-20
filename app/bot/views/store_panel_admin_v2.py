@@ -8,6 +8,7 @@ from app.bot.views.store_panel import (
 from app.bot.views.store_panel_admin import STORE_PANEL_ACTIONS, StorePanelAdminView
 from app.db.session import SessionLocal
 from app.services.calculator import normalize_text
+from app.services.store_media import StoreBannerError, prepare_store_banner
 from app.services.store_panel import get_or_create_store_panel, list_store_products
 
 
@@ -172,7 +173,23 @@ class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        prepared_banner = None
+        if banner_url:
+            try:
+                prepared_banner = await prepare_store_banner(
+                    banner_url,
+                    upload_limit=interaction.guild.filesize_limit,
+                )
+            except StoreBannerError as exc:
+                await interaction.edit_original_response(
+                    content=f"Não consegui preparar esse banner: {exc}",
+                    embed=None,
+                    view=StorePanelAdminViewV2(owner_id=interaction.user.id),
+                )
+                return
+
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
             config.thumbnail_url = title_image_url
@@ -187,8 +204,25 @@ class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
             )
             embed = build_store_panel_embed(config, len(products), interaction.guild)
 
+        banner_status = ""
+        if prepared_banner is not None:
+            original_mb = prepared_banner.source_size / (1024 * 1024)
+            final_mb = len(prepared_banner.data) / (1024 * 1024)
+            if prepared_banner.optimized:
+                banner_status = (
+                    f" GIF otimizado automaticamente de **{original_mb:.1f} MB** "
+                    f"para **{final_mb:.1f} MB** em WebP animado."
+                )
+            else:
+                banner_status = (
+                    f" GIF validado em **{final_mb:.1f} MB** e será anexado ao painel."
+                )
+
         await interaction.edit_original_response(
-            content="Imagens atualizadas: foto do título e banner são independentes.",
+            content=(
+                "Imagens atualizadas: foto do título e banner são independentes."
+                + banner_status
+            ),
             embed=embed,
             view=StorePanelAdminViewV2(owner_id=interaction.user.id),
         )
@@ -304,7 +338,7 @@ STORE_PANEL_ACTIONS_V2 = (
     (
         "media",
         "Imagens da loja",
-        "Foto do título e banner em campos separados",
+        "Foto do título + banner; GIF grande é otimizado automaticamente",
     ),
     (
         "controls",
