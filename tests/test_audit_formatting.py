@@ -31,6 +31,7 @@ def test_audit_embed_is_human_readable_with_order_context() -> None:
         order_context={
             "customer_id": 222,
             "customer_name": "Danonin",
+            "account_created_at": 1703187514,
             "products": ["Notifier × 1"],
             "total": "22.00",
             "status": "delivered",
@@ -41,7 +42,9 @@ def test_audit_embed_is_human_readable_with_order_context() -> None:
     assert embed.title == "NEXTBUY • Pagamento PIX confirmado"
     fields = {field.name: field.value for field in embed.fields}
     assert fields["Responsável"] == "<@111>"
-    assert fields["Usuário"] == "<@222> `Danonin (222)`"
+    assert "<@222> `Danonin (222)`" in fields["Usuário"]
+    assert "**ID:** `222`" in fields["Usuário"]
+    assert "**Conta criada em:** <t:1703187514:F>" in fields["Usuário"]
     assert "**Produto(s):** Notifier × 1" in fields["Detalhes"]
     assert "**Valor:** R$ 22,00" in fields["Detalhes"]
     assert "**Status:** Entregue" in fields["Detalhes"]
