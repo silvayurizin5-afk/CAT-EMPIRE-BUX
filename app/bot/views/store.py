@@ -430,6 +430,11 @@ class TermsSelect(discord.ui.Select):
         embed = discord.Embed(title=terms.title, description=terms.content)
         embed.set_footer(text=f"Versão {terms.version}")
         await interaction.response.edit_message(embed=embed, view=self.view)
+        if terms.ephemeral_message:
+            await interaction.followup.send(
+                terms.ephemeral_message[:2000],
+                ephemeral=True,
+            )
 
 
 class TermsView(discord.ui.View):
