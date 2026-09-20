@@ -373,7 +373,7 @@ class DeliveryPublicLayout(discord.ui.LayoutView):
         if not children:
             children.append(discord.ui.TextDisplay("\u200b"))
 
-        self.container = discord.ui.Container(*children, accent_colour=accent)
+        self.container = discord.ui.Container(*children, accent_colour=0x7B2CBF)
         self.add_item(self.container)
 
 
