@@ -25,8 +25,12 @@ def _is_gamepass(product: Product) -> bool:
     return _normalized_product_type(product) in {"gamepass", "game_pass"}
 
 
+def _tracks_robux(product: Product) -> bool:
+    return _normalized_product_type(product) in {"robux", "gamepass", "game_pass"}
+
+
 def _configured_robux_amount(product: Product) -> int | None:
-    if not _is_gamepass(product):
+    if not _tracks_robux(product):
         return None
     raw = dict(product.metadata_json or {}).get("robux_amount")
     try:
@@ -51,12 +55,13 @@ def _product_lines(product: Product) -> list[str]:
         f"**Status:** `{status}`",
         f"**Emoji da loja:** {product.emoji or '—'}",
     ]
-    if _is_gamepass(product):
+    if _tracks_robux(product):
         amount = _configured_robux_amount(product)
+        label = "Valor da Game Pass" if _is_gamepass(product) else "Robux por unidade"
         lines.append(
-            f"**Valor da Game Pass:** `{amount} Robux`"
+            f"**{label}:** `{amount} Robux`"
             if amount is not None
-            else "**Valor da Game Pass:** `não configurado`"
+            else f"**{label}:** `automático pelo preço`"
         )
     return lines
 
@@ -196,13 +201,13 @@ class ProductStockModal(discord.ui.Modal, title="Configurar estoque"):
         await interaction.edit_original_response(content=f"Estoque atualizado para **{label}**.")
 
 
-class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux da Game Pass"):
+class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux do produto"):
     def __init__(self, product: Product) -> None:
         super().__init__()
         self.product_id = product.id
         amount = _configured_robux_amount(product)
         self.robux_amount = discord.ui.TextInput(
-            label="Valor da Game Pass em Robux",
+            label="Quantidade de Robux por unidade",
             placeholder="Ex: 2200",
             required=False,
             max_length=12,
@@ -231,10 +236,10 @@ class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux da Game Pas
             if product is None or product.guild_id != interaction.guild.id:
                 await interaction.edit_original_response(content="Produto não encontrado.")
                 return
-            if not _is_gamepass(product):
+            if not _tracks_robux(product):
                 await interaction.edit_original_response(
                     content=(
-                        "Esse campo é usado apenas para produtos do tipo `gamepass`. "
+                        "Esse campo é usado apenas para produtos do tipo `robux` ou `gamepass`. "
                         "Itens comuns atualizam somente o valor gasto em reais."
                     )
                 )
@@ -274,7 +279,7 @@ class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux da Game Pas
         await interaction.edit_original_response(
             content=(
                 (
-                    f"Game Pass configurada como **{amount} Robux**. "
+                    f"Produto configurado como **{amount} Robux por unidade**. "
                     f"**{backfilled}** pedido(s) antigo(s) sem valor em Robux foram atualizados. "
                     "Perfil e ranking foram recalculados."
                 )
@@ -315,10 +320,10 @@ class ProductActionsView(discord.ui.View):
         if product is None:
             await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
             return
-        if not _is_gamepass(product):
+        if not _tracks_robux(product):
             await interaction.response.send_message(
                 "Itens comuns atualizam apenas o valor gasto em reais. "
-                "O valor em Robux é configurado somente para Game Pass.",
+                "O valor em Robux é configurável para produtos Robux e Game Pass.",
                 ephemeral=True,
             )
             return
