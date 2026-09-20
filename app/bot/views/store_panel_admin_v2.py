@@ -1,5 +1,6 @@
 import discord
 
+from app.bot.emoji import resolve_guild_emoji_aliases
 from app.bot.views.store_panel import (
     build_store_panel_embed,
     refresh_published_store_panel,
@@ -33,22 +34,11 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
             max_length=100,
             default=(config.product_count_label or "")[:100],
         )
-        self.thumbnail = discord.ui.TextInput(
-            label="Thumbnail (URL)",
-            required=False,
-            max_length=1000,
-            default=(config.thumbnail_url or "")[:1000],
-        )
-        for item in (self.placeholder, self.product_count, self.thumbnail):
+        for item in (self.placeholder, self.product_count):
             self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
-            return
-        try:
-            thumbnail_url = _http_url_or_none(str(self.thumbnail))
-        except ValueError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -56,7 +46,6 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
             config = await get_or_create_store_panel(session, interaction.guild.id)
             config.product_placeholder = str(self.placeholder).strip() or "Selecione um produto"
             config.product_count_label = str(self.product_count).strip()
-            config.thumbnail_url = thumbnail_url
 
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
@@ -68,6 +57,136 @@ class StoreControlsModalV2(discord.ui.Modal, title="Controles do painel"):
             embed = build_store_panel_embed(config, len(products))
         await interaction.edit_original_response(
             content="Controles atualizados.",
+            embed=embed,
+            view=StorePanelAdminViewV2(owner_id=interaction.user.id),
+        )
+        await refresh_published_store_panel(interaction.guild)
+
+
+class StoreAppearanceModalV2(discord.ui.Modal, title="Visual da loja"):
+    def __init__(self, *, config) -> None:
+        super().__init__()
+        self.title_input = discord.ui.TextInput(
+            label="Título (aceita :emoji_do_servidor:)",
+            max_length=256,
+            default=(config.title or "NEXTBUY")[:256],
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Descrição (aceita markdown e :emoji:)",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=4000,
+            default=(config.description or "")[:4000],
+        )
+        self.footer_input = discord.ui.TextInput(
+            label="Rodapé (aceita :emoji:)",
+            required=False,
+            max_length=2048,
+            default=(config.footer_text or "")[:2048],
+        )
+        self.color_input = discord.ui.TextInput(
+            label="Cor hexadecimal",
+            max_length=9,
+            default=f"#{config.color:06X}",
+        )
+        for item in (
+            self.title_input,
+            self.description_input,
+            self.footer_input,
+            self.color_input,
+        ):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        from app.bot.views.store_panel_admin import _parse_color
+
+        try:
+            color = _parse_color(str(self.color_input))
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        title = resolve_guild_emoji_aliases(str(self.title_input).strip(), interaction.guild)
+        description = resolve_guild_emoji_aliases(
+            str(self.description_input).strip(), interaction.guild
+        )
+        footer = resolve_guild_emoji_aliases(str(self.footer_input).strip(), interaction.guild)
+
+        await interaction.response.defer()
+        async with SessionLocal() as session, session.begin():
+            config = await get_or_create_store_panel(session, interaction.guild.id)
+            config.title = title or "NEXTBUY"
+            config.description = description
+            config.footer_text = footer
+            config.color = color
+
+        async with SessionLocal() as session, session.begin():
+            config = await get_or_create_store_panel(session, interaction.guild.id)
+            products = await list_store_products(
+                session,
+                guild_id=interaction.guild.id,
+                config=config,
+            )
+            embed = build_store_panel_embed(config, len(products))
+
+        await interaction.edit_original_response(
+            content=(
+                "Visual atualizado. Use `:nome_do_emoji:` para emojis do servidor; "
+                "a prévia abaixo já usa a configuração salva."
+            ),
+            embed=embed,
+            view=StorePanelAdminViewV2(owner_id=interaction.user.id),
+        )
+        await refresh_published_store_panel(interaction.guild)
+
+
+class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
+    def __init__(self, *, config) -> None:
+        super().__init__()
+        self.title_image = discord.ui.TextInput(
+            label="Foto do título / thumbnail (URL)",
+            required=False,
+            max_length=1000,
+            default=(config.thumbnail_url or "")[:1000],
+        )
+        self.banner = discord.ui.TextInput(
+            label="Banner / imagem grande (URL)",
+            required=False,
+            max_length=1000,
+            default=(config.image_url or "")[:1000],
+        )
+        self.add_item(self.title_image)
+        self.add_item(self.banner)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        try:
+            title_image_url = _http_url_or_none(str(self.title_image))
+            banner_url = _http_url_or_none(str(self.banner))
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        async with SessionLocal() as session, session.begin():
+            config = await get_or_create_store_panel(session, interaction.guild.id)
+            config.thumbnail_url = title_image_url
+            config.image_url = banner_url
+
+        async with SessionLocal() as session, session.begin():
+            config = await get_or_create_store_panel(session, interaction.guild.id)
+            products = await list_store_products(
+                session,
+                guild_id=interaction.guild.id,
+                config=config,
+            )
+            embed = build_store_panel_embed(config, len(products))
+
+        await interaction.edit_original_response(
+            content="Imagens atualizadas: foto do título e banner são independentes.",
             embed=embed,
             view=StorePanelAdminViewV2(owner_id=interaction.user.id),
         )
@@ -117,8 +236,12 @@ class CheckoutControlsModal(discord.ui.Modal, title="Tela antes do pagamento"):
         await interaction.response.defer()
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
-            config.checkout_title_template = title
-            config.checkout_description = str(self.description).strip()
+            config.checkout_title_template = resolve_guild_emoji_aliases(
+                title, interaction.guild
+            )
+            config.checkout_description = resolve_guild_emoji_aliases(
+                str(self.description).strip(), interaction.guild
+            )
             config.buy_button_label = str(self.buy_label).strip() or "Comprar"
             config.coupon_button_label = str(self.coupon_label).strip() or "Adicionar cupom"
         await interaction.edit_original_response(
@@ -171,11 +294,20 @@ BASE_ACTIONS = tuple(
     if item[0] not in {"controls"}
 )
 STORE_PANEL_ACTIONS_V2 = (
-    BASE_ACTIONS[0],
+    (
+        "appearance",
+        "Visual da loja",
+        "Título, descrição, rodapé, cor e emojis por :nome:",
+    ),
+    (
+        "media",
+        "Imagens da loja",
+        "Foto do título e banner em campos separados",
+    ),
     (
         "controls",
         "Painel da loja",
-        "Seletor, quantidade de produtos e thumbnail",
+        "Seletor e quantidade de produtos",
     ),
     (
         "checkout",
@@ -221,14 +353,17 @@ class StorePanelAdminViewV2(StorePanelAdminView):
         if action == "game_icons":
             await interaction.response.send_modal(GameIconModal())
             return
-        if action in {"controls", "checkout"}:
+        if action in {"appearance", "media", "controls", "checkout"}:
             async with SessionLocal() as session, session.begin():
                 config = await get_or_create_store_panel(session, interaction.guild.id)
-                modal = (
-                    StoreControlsModalV2(config=config)
-                    if action == "controls"
-                    else CheckoutControlsModal(config=config)
-                )
+                if action == "appearance":
+                    modal = StoreAppearanceModalV2(config=config)
+                elif action == "media":
+                    modal = StoreMediaModalV2(config=config)
+                elif action == "controls":
+                    modal = StoreControlsModalV2(config=config)
+                else:
+                    modal = CheckoutControlsModal(config=config)
             await interaction.response.send_modal(modal)
             return
         await super().handle_action(interaction, action)
