@@ -86,9 +86,9 @@ DEFAULT_DELIVERY_CONFIG: dict[str, object] = {
     "accent_color": "#23A55A",
     "show_image": True,
     "banner_enabled": True,
-    "banner_source": "local",
+    "banner_source": "url",
     "banner_mode": "animated",
-    "banner_url": "",
+    "banner_url": "https://cdn.discordapp.com/attachments/1549241356743090288/1551378076057997322/ENTREGA-REALIZADA.gif?ex=6ab1c0ec&is=6ab06f6c&hm=93bb08903e51895f8cb222af1f6dbff4a46796651740b89fc622570f5b89250e&",
     "delivery_emoji": VERIFY_EMOJI,
     "arrow_emoji": ARROW_EMOJI,
     "user_emoji": MEMBER_EMOJI,
@@ -110,8 +110,6 @@ def effective_delivery_config(raw: dict[str, Any] | None) -> dict[str, object]:
         return merged
 
     for key in DEFAULT_DELIVERY_CONFIG:
-        if key.startswith("banner_"):
-            continue  # The delivery banner is always the bundled animated GIF.
         if key not in raw or raw[key] is None:
             continue
         value = raw[key]
