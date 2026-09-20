@@ -56,6 +56,11 @@ class TermsGateSelect(discord.ui.Select):
         if isinstance(self.view, TermsGateView):
             self.view.set_selected(term)
             await interaction.response.edit_message(content=None, embeds=[], view=self.view)
+            if term.ephemeral_message:
+                await interaction.followup.send(
+                    term.ephemeral_message[:2000],
+                    ephemeral=True,
+                )
 
 
 class TermsGateView(discord.ui.LayoutView):
