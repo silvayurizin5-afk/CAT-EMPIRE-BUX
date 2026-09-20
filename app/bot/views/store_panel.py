@@ -18,7 +18,12 @@ from app.services.calculator import format_brl
 from app.services.manual_payments import cancel_manual_pix_order
 from app.services.orders import OutOfStockError
 from app.services.pix import PixConfigError, validate_pix_config
-from app.services.store_media import PreparedStoreBanner, StoreBannerError, prepare_store_banner
+from app.services.store_media import (
+    PreparedStoreBanner,
+    StoreBannerError,
+    prepare_store_banner,
+    reusable_banner_attachment_url,
+)
 from app.services.store_panel import (
     create_store_product_order,
     discounted_total,
@@ -556,59 +561,89 @@ async def publish_store_panel(
 ) -> discord.Message | None:
     if interaction.guild is None:
         return None
-    async with SessionLocal() as session, session.begin():
-        config = await get_or_create_store_panel(session, interaction.guild.id)
-        products = await list_store_products(session, guild_id=interaction.guild.id, config=config)
-        prepared_banner = await _prepare_store_banner_for_guild(config, interaction.guild)
-        banner_url = (
-            prepared_banner.attachment_url
-            if prepared_banner is not None
-            else config.image_url
-        )
-        view = build_store_panel_card(
-            config,
-            products,
-            guild=interaction.guild,
-            banner_url=banner_url,
-            timeout=None,
-        )
+    guild = interaction.guild
 
-        message: discord.Message | None = None
-        if config.published_channel_id and config.published_message_id:
-            old_channel = interaction.guild.get_channel(config.published_channel_id)
-            if isinstance(old_channel, discord.TextChannel):
-                try:
-                    old_message = await old_channel.fetch_message(config.published_message_id)
-                    if old_channel.id == channel.id:
-                        if prepared_banner is not None:
-                            await old_message.edit(
-                                content=None,
-                                embeds=[],
-                                attachments=[prepared_banner.to_file()],
-                                view=view,
-                            )
-                        else:
-                            await old_message.edit(
-                                content=None,
-                                embeds=[],
-                                attachments=[],
-                                view=view,
-                            )
-                        message = old_message
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    message = None
-        if message is None:
-            if prepared_banner is not None:
-                message = await channel.send(
-                    file=prepared_banner.to_file(),
-                    view=view,
-                )
-            else:
-                message = await channel.send(view=view)
-        config.published_channel_id = channel.id
-        config.published_message_id = message.id
+    async with SessionLocal() as session, session.begin():
+        config = await get_or_create_store_panel(session, guild.id)
+        products = await list_store_products(session, guild_id=guild.id, config=config)
+        published_channel_id = config.published_channel_id
+        published_message_id = config.published_message_id
+
+    # Caminho rápido: se o painel já possui o mesmo banner anexado,
+    # apenas reutiliza o attachment existente. Não baixa nem reenvia o GIF.
+    existing_message: discord.Message | None = None
+    if published_channel_id == channel.id and published_message_id:
+        try:
+            existing_message = await channel.fetch_message(published_message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            existing_message = None
+
+    if existing_message is not None:
+        reused_url = reusable_banner_attachment_url(
+            config.image_url,
+            existing_message.attachments,
+        )
+        if reused_url is not None:
+            view = build_store_panel_card(
+                config,
+                products,
+                guild=guild,
+                banner_url=reused_url,
+                timeout=None,
+            )
+            await existing_message.edit(
+                content=None,
+                embeds=[],
+                attachments=list(existing_message.attachments),
+                view=view,
+            )
+            return existing_message
+
+    prepared_banner = await _prepare_store_banner_for_guild(config, guild)
+    banner_url = (
+        prepared_banner.attachment_url
+        if prepared_banner is not None
+        else config.image_url
+    )
+    view = build_store_panel_card(
+        config,
+        products,
+        guild=guild,
+        banner_url=banner_url,
+        timeout=None,
+    )
+
+    message: discord.Message | None = existing_message
+    if message is not None:
+        if prepared_banner is not None:
+            await message.edit(
+                content=None,
+                embeds=[],
+                attachments=[prepared_banner.to_file()],
+                view=view,
+            )
+        else:
+            await message.edit(
+                content=None,
+                embeds=[],
+                attachments=[],
+                view=view,
+            )
+    else:
+        if prepared_banner is not None:
+            message = await channel.send(
+                file=prepared_banner.to_file(),
+                view=view,
+            )
+        else:
+            message = await channel.send(view=view)
+
+    async with SessionLocal() as session, session.begin():
+        saved = await get_or_create_store_panel(session, guild.id)
+        saved.published_channel_id = channel.id
+        saved.published_message_id = message.id
         await session.flush()
-        return message
+    return message
 
 
 async def refresh_published_store_panel(guild: discord.Guild) -> bool:
@@ -619,6 +654,36 @@ async def refresh_published_store_panel(guild: discord.Guild) -> bool:
         if config is None or not config.published_channel_id or not config.published_message_id:
             return False
         products = await list_store_products(session, guild_id=guild.id, config=config)
+        channel_id = config.published_channel_id
+        message_id = config.published_message_id
+
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return False
+
+    try:
+        message = await channel.fetch_message(message_id)
+
+        reused_url = reusable_banner_attachment_url(
+            config.image_url,
+            message.attachments,
+        )
+        if reused_url is not None:
+            view = build_store_panel_card(
+                config,
+                products,
+                guild=guild,
+                banner_url=reused_url,
+                timeout=None,
+            )
+            await message.edit(
+                content=None,
+                embeds=[],
+                attachments=list(message.attachments),
+                view=view,
+            )
+            return True
+
         prepared_banner = await _prepare_store_banner_for_guild(config, guild)
         banner_url = (
             prepared_banner.attachment_url
@@ -632,14 +697,6 @@ async def refresh_published_store_panel(guild: discord.Guild) -> bool:
             banner_url=banner_url,
             timeout=None,
         )
-        channel_id = config.published_channel_id
-        message_id = config.published_message_id
-
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        return False
-    try:
-        message = await channel.fetch_message(message_id)
         if prepared_banner is not None:
             await message.edit(
                 content=None,
