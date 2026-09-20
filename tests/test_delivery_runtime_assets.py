@@ -1,8 +1,6 @@
 from decimal import Decimal
 
 import pytest
-from PIL import Image
-
 from app.bot.cogs.delivery_runtime import (
     _configured_delivery_banner,
     _emoji_image_url,
@@ -113,19 +111,23 @@ def test_http_game_icon_is_valid_image_fallback() -> None:
 
 
 
-@pytest.mark.parametrize("config", [
-    None, {"banner_enabled": False}, {"banner_mode": "static"},
-    {"banner_source": "url", "banner_url": "https://example.com/banner.png"},
-])
-def test_delivery_banner_always_attaches_real_animation(config) -> None:
+@pytest.mark.parametrize(
+    "config",
+    [
+        None,
+        {"banner_enabled": False},
+        {"banner_mode": "static"},
+        {"banner_source": "url", "banner_url": "https://example.com/banner.png"},
+    ],
+)
+def test_delivery_banner_uses_supplied_discord_cdn_url(config) -> None:
     banner_file, banner_url = _configured_delivery_banner(config)
-    try:
-        assert banner_url == "attachment://nextbuy-entrega.gif"
-        assert banner_file.filename == "nextbuy-entrega.gif"
-        with Image.open(banner_file.fp) as animation:
-            assert animation.format == "GIF"
-            assert animation.is_animated
-            assert animation.n_frames > 1
-            assert animation.info["loop"] == 0
-    finally:
-        banner_file.close()
+
+    assert banner_file is None
+    assert banner_url == (
+        "https://cdn.discordapp.com/attachments/1549241356743090288/"
+        "1551378076057997322/ENTREGA-REALIZADA.gif"
+        "?ex=6ab1c0ec&is=6ab06f6c&"
+        "hm=93bb08903e51895f8cb222af1f6dbff4a46796651740b89fc622570f5b89250e&"
+    )
+
