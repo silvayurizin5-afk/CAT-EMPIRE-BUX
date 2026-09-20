@@ -4,7 +4,8 @@ from collections.abc import Iterable
 
 import discord
 
-BRAND_ACCENT_HEX = 0x7B2CBF\nDEFAULT_ACCENT = discord.Colour(BRAND_ACCENT_HEX)
+BRAND_ACCENT_HEX = 0x7B2CBF
+DEFAULT_ACCENT = discord.Colour(BRAND_ACCENT_HEX)
 
 
 def format_percent(value) -> str:
