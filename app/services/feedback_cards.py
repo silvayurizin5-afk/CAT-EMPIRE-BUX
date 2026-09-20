@@ -97,7 +97,9 @@ def render_feedback_card(
         raise ValueError("stars precisa estar entre 1 e 5")
 
     safe_name = _sanitize_card_text(customer_name).strip() or "Cliente"
-    safe_order = _sanitize_card_text(order_short_id).strip()[:32]
+    # order_short_id é mantido na assinatura apenas por compatibilidade com chamadas
+    # antigas. IDs internos de pedido não são exibidos no feedback público.
+    _ = order_short_id
 
     image = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (27, 29, 34))
     draw = ImageDraw.Draw(image)
@@ -138,7 +140,7 @@ def render_feedback_card(
     draw.text((230, 127), safe_name[:48], font=_font(30), fill=(219, 222, 225))
     draw.text(
         (230, 169),
-        f"Nota: {stars}/5   •   Pedido #{safe_order}",
+        f"Nota: {stars}/5",
         font=_font(25),
         fill=(181, 186, 193),
     )
