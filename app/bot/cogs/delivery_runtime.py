@@ -54,56 +54,16 @@ _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
 _DELIVERY_BANNER_PATH = Path(__file__).resolve().parents[2] / "assets" / "delivery_banner.gif"
 _DELIVERY_BANNER_FILENAME = "nextbuy-entrega.gif"
 _DELIVERY_BANNER_URL = f"attachment://{_DELIVERY_BANNER_FILENAME}"
-_DELIVERY_BANNER_STATIC_PATH = (
-    Path(__file__).resolve().parents[2] / "assets" / "delivery_banner_static.png"
-)
-_DELIVERY_BANNER_STATIC_FILENAME = "nextbuy-entrega.png"
-_DELIVERY_BANNER_STATIC_URL = f"attachment://{_DELIVERY_BANNER_STATIC_FILENAME}"
 
 
 def _configured_delivery_banner(
     raw_config: dict[str, object] | None,
-) -> tuple[discord.File | None, str | None]:
-    config = effective_delivery_config(raw_config)
-    if not bool(config.get("banner_enabled", True)):
-        return None, None
-
-    source = str(config.get("banner_source") or "local").strip().casefold()
-    if source == "url":
-        url = str(config.get("banner_url") or "").strip()
-        if url.lower().startswith(("http://", "https://")):
-            return None, url
-        return None, None
-
-    mode = str(config.get("banner_mode") or "static").strip().casefold()
-    if mode == "animated" and _DELIVERY_BANNER_PATH.is_file():
-        return (
-            discord.File(
-                _DELIVERY_BANNER_PATH,
-                filename=_DELIVERY_BANNER_FILENAME,
-            ),
-            _DELIVERY_BANNER_URL,
-        )
-
-    if _DELIVERY_BANNER_STATIC_PATH.is_file():
-        return (
-            discord.File(
-                _DELIVERY_BANNER_STATIC_PATH,
-                filename=_DELIVERY_BANNER_STATIC_FILENAME,
-            ),
-            _DELIVERY_BANNER_STATIC_URL,
-        )
-
-    # Fallback para instalações antigas que ainda não possuem o PNG estático.
-    if _DELIVERY_BANNER_PATH.is_file():
-        return (
-            discord.File(
-                _DELIVERY_BANNER_PATH,
-                filename=_DELIVERY_BANNER_FILENAME,
-            ),
-            _DELIVERY_BANNER_URL,
-        )
-    return None, None
+) -> tuple[discord.File, str]:
+    # Old saved banner settings must not hide or replace the fixed animation.
+    return (
+        discord.File(_DELIVERY_BANNER_PATH, filename=_DELIVERY_BANNER_FILENAME),
+        _DELIVERY_BANNER_URL,
+    )
 
 
 def _delivery_image(items) -> str | None:

@@ -1,5 +1,8 @@
 from decimal import Decimal
 
+import pytest
+from PIL import Image
+
 from app.bot.cogs.delivery_runtime import (
     _configured_delivery_banner,
     _emoji_image_url,
@@ -110,28 +113,19 @@ def test_http_game_icon_is_valid_image_fallback() -> None:
 
 
 
-def test_delivery_banner_is_static_local_by_default() -> None:
-    banner_file, banner_url = _configured_delivery_banner(None)
-    assert banner_file is not None
-    assert banner_url == "attachment://nextbuy-entrega.png"
-    banner_file.close()
-
-
-def test_delivery_banner_can_be_disabled() -> None:
-    banner_file, banner_url = _configured_delivery_banner(
-        {"banner_enabled": False}
-    )
-    assert banner_file is None
-    assert banner_url is None
-
-
-def test_delivery_banner_can_use_custom_url() -> None:
-    banner_file, banner_url = _configured_delivery_banner(
-        {
-            "banner_enabled": True,
-            "banner_source": "url",
-            "banner_url": "https://example.com/banner.gif",
-        }
-    )
-    assert banner_file is None
-    assert banner_url == "https://example.com/banner.gif"
+@pytest.mark.parametrize("config", [
+    None, {"banner_enabled": False}, {"banner_mode": "static"},
+    {"banner_source": "url", "banner_url": "https://example.com/banner.png"},
+])
+def test_delivery_banner_always_attaches_real_animation(config) -> None:
+    banner_file, banner_url = _configured_delivery_banner(config)
+    try:
+        assert banner_url == "attachment://nextbuy-entrega.gif"
+        assert banner_file.filename == "nextbuy-entrega.gif"
+        with Image.open(banner_file.fp) as animation:
+            assert animation.format == "GIF"
+            assert animation.is_animated
+            assert animation.n_frames > 1
+            assert animation.info["loop"] == 0
+    finally:
+        banner_file.close()

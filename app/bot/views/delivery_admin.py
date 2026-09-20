@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import discord
 
+from app.bot.cogs.delivery_runtime import _configured_delivery_banner
 from app.bot.components_v2 import CardLayout, add_action_row
 from app.db.session import SessionLocal
 from app.services.delivery_settings import (
@@ -139,108 +140,6 @@ class DeliveryVisualModal(discord.ui.Modal, title="Visual da entrega"):
         await interaction.response.send_message("Visual de entrega atualizado.", ephemeral=True)
 
 
-class DeliveryBannerModal(discord.ui.Modal, title="Banner da entrega"):
-    def __init__(self, config: dict[str, object]) -> None:
-        super().__init__()
-        self.enabled = discord.ui.TextInput(
-            label="Ativar banner? sim/não",
-            max_length=3,
-            default="sim" if bool(config.get("banner_enabled", True)) else "não",
-        )
-        self.source = discord.ui.TextInput(
-            label="Fonte: local ou url",
-            max_length=5,
-            default=str(config.get("banner_source") or "local")[:5],
-        )
-        self.mode = discord.ui.TextInput(
-            label="Modo local: static ou animated",
-            max_length=8,
-            default=str(config.get("banner_mode") or "static")[:8],
-        )
-        self.url = discord.ui.TextInput(
-            label="URL personalizada (se fonte=url)",
-            required=False,
-            max_length=1000,
-            default=str(config.get("banner_url") or "")[:1000],
-        )
-        for item in (self.enabled, self.source, self.mode, self.url):
-            self.add_item(item)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            return
-
-        enabled = str(self.enabled).strip().casefold()
-        if enabled not in {"sim", "nao", "não"}:
-            await interaction.response.send_message(
-                "Em ativar banner, use apenas `sim` ou `não`.",
-                ephemeral=True,
-            )
-            return
-
-        source = str(self.source).strip().casefold()
-        if source not in {"local", "url"}:
-            await interaction.response.send_message(
-                "A fonte deve ser `local` ou `url`.",
-                ephemeral=True,
-            )
-            return
-
-        mode = str(self.mode).strip().casefold()
-        aliases = {
-            "static": "static",
-            "estatico": "static",
-            "estático": "static",
-            "animated": "animated",
-            "animado": "animated",
-        }
-        mode = aliases.get(mode, "")
-        if not mode:
-            await interaction.response.send_message(
-                "O modo deve ser `static`/`estático` ou `animated`/`animado`.",
-                ephemeral=True,
-            )
-            return
-
-        url = str(self.url).strip()
-        if source == "url":
-            if not url:
-                await interaction.response.send_message(
-                    "Informe uma URL quando a fonte do banner for `url`.",
-                    ephemeral=True,
-                )
-                return
-            if not url.lower().startswith(("http://", "https://")):
-                await interaction.response.send_message(
-                    "A URL do banner deve começar com http:// ou https://.",
-                    ephemeral=True,
-                )
-                return
-
-        config = await _load_config(interaction.guild.id)
-        config.update(
-            {
-                "banner_enabled": enabled == "sim",
-                "banner_source": source,
-                "banner_mode": mode,
-                "banner_url": url,
-            }
-        )
-        try:
-            await _save_config(interaction.guild.id, config)
-        except ValueError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-
-        state = "ativado" if enabled == "sim" else "desativado"
-        source_label = "arquivo local" if source == "local" else "URL personalizada"
-        mode_label = "estático" if mode == "static" else "animado"
-        await interaction.response.send_message(
-            f"Banner {state}. Fonte: **{source_label}** • modo: **{mode_label}**.",
-            ephemeral=True,
-        )
-
-
 class DeliveryEmojiModal(discord.ui.Modal, title="Emojis principais da entrega"):
     def __init__(self, config: dict[str, object]) -> None:
         super().__init__()
@@ -316,11 +215,11 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 "**Emojis:** `{delivery}`, `{arrow}`, `{user}`, `{separator}`, `{verified}`, `{order_icon}`, `{game_emoji}`, `{product_emoji}`, `{discount_emoji}`",
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
-                "**Banner:** configurável separadamente como local/URL e estático/animado.",
+                "**Banner:** GIF animado fixo ENTREGA REALIZADA.",
             ],
             footer=(
                 "Imagens de produto/jogo continuam como ícone inline. "
-                "O banner público da entrega é configurado no botão Banner."
+                "O banner ENTREGA REALIZADA permanece sempre animado."
             ),
             timeout=900,
         )
@@ -349,12 +248,6 @@ class DeliveryAdminView(discord.ui.LayoutView):
             edit_product_emojis,
             preview,
         )
-        edit_banner = discord.ui.Button(
-            label="Banner",
-            style=discord.ButtonStyle.secondary,
-        )
-        edit_banner.callback = self._edit_banner
-        add_action_row(self.container, edit_banner)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner_id:
@@ -373,12 +266,6 @@ class DeliveryAdminView(discord.ui.LayoutView):
             return
         config = await _load_config(interaction.guild.id)
         await interaction.response.send_modal(DeliveryVisualModal(config))
-
-    async def _edit_banner(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            return
-        config = await _load_config(interaction.guild.id)
-        await interaction.response.send_modal(DeliveryBannerModal(config))
 
     async def _edit_emojis(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -414,13 +301,16 @@ class DeliveryAdminView(discord.ui.LayoutView):
             client_mention=interaction.user.mention,
             items=[item],
         )
+        banner_file, banner_url = _configured_delivery_banner(config)
         await interaction.response.send_message(
             view=CardLayout(
                 title=None,
                 lines=([title] if title else []) + lines,
                 footer=footer or None,
                 accent_colour=0x7B2CBF,
+                image_url=banner_url,
             ),
+            file=banner_file,
             ephemeral=True,
         )
 
