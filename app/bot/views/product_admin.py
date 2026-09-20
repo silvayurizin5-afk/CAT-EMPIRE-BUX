@@ -1,4 +1,4 @@
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 import discord
 from sqlalchemy import select
@@ -8,7 +8,7 @@ from app.bot.emoji import select_option_emoji
 from app.bot.workflows.leaderboard import refresh_leaderboard
 from app.db.models import Order, OrderItem, Product
 from app.db.session import SessionLocal
-from app.services.calculator import format_brl
+from app.services.calculator import ROBUX_PRICE_PER_100, format_brl
 from app.services.catalog import (
     list_products,
     set_product_active,
@@ -31,6 +31,16 @@ def _is_gamepass(product: Product) -> bool:
 
 def _tracks_robux(product: Product) -> bool:
     return _normalized_product_type(product) in {"robux", "gamepass", "game_pass"}
+
+
+def _gamepass_robux_equivalent(product: Product) -> int | None:
+    if not _is_gamepass(product) or product.price_credits is None:
+        return None
+    price = Decimal(str(product.price_credits))
+    if not price.is_finite() or price <= 0:
+        return None
+    raw = price * Decimal("100") / ROBUX_PRICE_PER_100
+    return int(raw.to_integral_value(rounding=ROUND_DOWN))
 
 
 def _configured_robux_amount(product: Product) -> int | None:
@@ -59,17 +69,23 @@ def _product_lines(product: Product) -> list[str]:
         f"**Status:** `{status}`",
         f"**Emoji da loja:** {product.emoji or '—'}",
     ]
-    if _tracks_robux(product):
-        amount = _configured_robux_amount(product)
-        label = "Valor da Game Pass" if _is_gamepass(product) else "Robux por unidade"
-        if amount is not None:
-            lines.append(f"**{label}:** `{amount} Robux`")
-        elif _is_gamepass(product):
-            lines.append(
-                f"**{label}:** `não configurado — não entra no total de Robux`"
+    if _is_gamepass(product):
+        equivalent = _gamepass_robux_equivalent(product)
+        lines.append(
+            (
+                f"**Robux no ranking:** `{equivalent} Robux` "
+                f"(automático por {format_brl(product.price_credits)}; R$ 2,90 = 100)"
             )
-        else:
-            lines.append(f"**{label}:** `automático pelo preço/cotação`")
+            if equivalent is not None
+            else "**Robux no ranking:** `sem preço em reais configurado`"
+        )
+    elif _normalized_product_type(product) == "robux":
+        amount = _configured_robux_amount(product)
+        lines.append(
+            f"**Robux por unidade:** `{amount} Robux`"
+            if amount is not None
+            else "**Robux por unidade:** `quantidade da compra/cotação`"
+        )
     return lines
 
 
@@ -243,12 +259,17 @@ class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux do produto"
             if product is None or product.guild_id != interaction.guild.id:
                 await interaction.edit_original_response(content="Produto não encontrado.")
                 return
-            if not _tracks_robux(product):
+            if _is_gamepass(product):
                 await interaction.edit_original_response(
                     content=(
-                        "Esse campo é usado apenas para produtos do tipo `robux` ou `gamepass`. "
-                        "Itens comuns atualizam somente o valor gasto em reais."
+                        "Game Pass usa automaticamente o preço em reais no ranking "
+                        "(R$ 2,90 = 100 Robux)."
                     )
+                )
+                return
+            if _normalized_product_type(product) != "robux":
+                await interaction.edit_original_response(
+                    content="Itens e contas atualizam somente o valor gasto em reais."
                 )
                 return
 
@@ -353,10 +374,22 @@ class ProductActionsView(discord.ui.View):
         if product is None:
             await interaction.response.send_message("Produto não encontrado.", ephemeral=True)
             return
-        if not _tracks_robux(product):
+        if _is_gamepass(product):
+            equivalent = _gamepass_robux_equivalent(product)
+            detail = (
+                f" Atualmente: **{equivalent} Robux** no ranking."
+                if equivalent is not None
+                else " Configure primeiro o preço da Game Pass em reais."
+            )
             await interaction.response.send_message(
-                "Itens comuns atualizam apenas o valor gasto em reais. "
-                "O valor em Robux é configurável para produtos Robux e Game Pass.",
+                "Game Pass não usa valor em Robux manual. O ranking converte o preço "
+                "em reais por **R$ 2,90 = 100 Robux**." + detail,
+                ephemeral=True,
+            )
+            return
+        if _normalized_product_type(product) != "robux":
+            await interaction.response.send_message(
+                "Itens e contas atualizam apenas o valor gasto em reais.",
                 ephemeral=True,
             )
             return
