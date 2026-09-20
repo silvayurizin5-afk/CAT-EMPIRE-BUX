@@ -215,11 +215,11 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 "**Emojis:** `{delivery}`, `{arrow}`, `{user}`, `{separator}`, `{verified}`, `{order_icon}`, `{game_emoji}`, `{product_emoji}`, `{discount_emoji}`",
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
-                "**Banner:** GIF animado fixo ENTREGA REALIZADA.",
+                "**Banner:** GIF ENTREGA REALIZADA carregado diretamente pela URL do Discord CDN.",
             ],
             footer=(
                 "Imagens de produto/jogo continuam como ícone inline. "
-                "O banner ENTREGA REALIZADA permanece sempre animado."
+                "O banner público não é reenviado como arquivo pelo bot."
             ),
             timeout=900,
         )
@@ -301,7 +301,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
             client_mention=interaction.user.mention,
             items=[item],
         )
-        banner_file, banner_url = _configured_delivery_banner(config)
+        _, banner_url = _configured_delivery_banner(config)
         await interaction.response.send_message(
             view=CardLayout(
                 title=None,
@@ -310,7 +310,6 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 accent_colour=0x7B2CBF,
                 image_url=banner_url,
             ),
-            file=banner_file,
             ephemeral=True,
         )
 
