@@ -10,7 +10,7 @@ from app.bot.checks import can_support
 from app.bot.components_v2 import CardLayout, add_action_row
 from app.bot.workflows.leaderboard import refresh_leaderboard
 from app.bot.workflows.ranks import sync_customer_roles
-from app.bot.workflows.tickets import TicketStaffView
+from app.bot.workflows.tickets import TicketDeleteConfirmView, TicketStaffView
 from app.db.models import GuildConfig, Order, OrderItem, User
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
@@ -137,9 +137,15 @@ class ManualPixPaymentLayout(discord.ui.LayoutView):
             style=discord.ButtonStyle.danger,
             custom_id=f"nextbuy:pix:{order_id}:cancel",
         )
+        delete = discord.ui.Button(
+            label="Excluir ticket",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"nextbuy:pix:{order_id}:delete",
+        )
         confirm.callback = self._confirm
         cancel.callback = self._cancel
-        add_action_row(self.container, confirm, cancel)
+        delete.callback = self._delete
+        add_action_row(self.container, confirm, cancel, delete)
 
     async def _confirm(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not await can_support(interaction):
@@ -198,6 +204,30 @@ class ManualPixPaymentLayout(discord.ui.LayoutView):
                     allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
         await interaction.followup.send("Pagamento confirmado e registrado.", ephemeral=True)
+
+    async def _delete(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not await can_support(interaction):
+            await interaction.response.send_message(
+                "Sem permissão para excluir tickets.",
+                ephemeral=True,
+            )
+            return
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("Canal inválido.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            (
+                "**Excluir permanentemente este ticket de pagamento?**\n"
+                "Como o pagamento ainda está pendente, o pedido será cancelado e o estoque/cupom "
+                "serão devolvidos. O transcript será salvo primeiro quando configurado."
+            ),
+            view=TicketDeleteConfirmView(
+                order_id=self.order_id,
+                owner_id=interaction.user.id,
+                channel_id=interaction.channel.id,
+            ),
+            ephemeral=True,
+        )
 
     async def _cancel(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not await can_support(interaction):
