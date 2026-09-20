@@ -231,8 +231,8 @@ def _common_values(config: dict[str, object], order_id, client_mention: str) -> 
         "member": str(config["member_emoji"]),
         "box": str(config["box_emoji"]),
         "client": client_mention,
-        "order": str(order_id),
-        "order_short": str(order_id)[:8],
+        "order": "",
+        "order_short": "",
     }
 
 
