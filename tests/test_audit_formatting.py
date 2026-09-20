@@ -4,8 +4,8 @@ from app.bot.cogs.audit_logs import build_audit_embed
 from app.services.audit import PendingAuditDelivery
 
 
-def test_audit_embed_is_human_readable() -> None:
-    item = PendingAuditDelivery(
+def _audit_item() -> PendingAuditDelivery:
+    return PendingAuditDelivery(
         delivery_id=1,
         audit_log_id=42,
         guild_id=123,
@@ -24,16 +24,40 @@ def test_audit_embed_is_human_readable() -> None:
         created_at=datetime.now(UTC),
     )
 
-    embed = build_audit_embed(item)
+
+def test_audit_embed_is_human_readable_with_order_context() -> None:
+    embed = build_audit_embed(
+        _audit_item(),
+        order_context={
+            "customer_id": 222,
+            "customer_name": "Danonin",
+            "products": ["Notifier × 1"],
+            "total": "22.00",
+            "status": "delivered",
+            "channel_id": 333,
+        },
+    )
+
     assert embed.title == "NEXTBUY • Pagamento PIX confirmado"
     fields = {field.name: field.value for field in embed.fields}
     assert fields["Responsável"] == "<@111>"
-    assert fields["Pedido"] == "`#4fb4263b`"
+    assert fields["Usuário"] == "<@222> `Danonin (222)`"
+    assert "**Produto(s):** Notifier × 1" in fields["Detalhes"]
+    assert "**Valor:** R$ 22,00" in fields["Detalhes"]
+    assert "**Status:** Entregue" in fields["Detalhes"]
+    assert "**Canal:** <#333>" in fields["Detalhes"]
+    assert "Pedido" not in fields
+    assert fields["Transcript salvo"] == "Sim"
+    assert fields["Desconto"] == "10%"
+    assert embed.footer.text == "NEXTBUY • Auditoria"
+    assert "Código:" not in embed.footer.text
+    assert "#42" not in embed.footer.text
+
+
+def test_audit_embed_falls_back_without_order_context() -> None:
+    embed = build_audit_embed(_audit_item())
+    fields = {field.name: field.value for field in embed.fields}
+    assert "Pedido" not in fields
     assert fields["Valor"] == "R$ 22,00"
     assert fields["Cliente"] == "<@222>"
     assert fields["Canal"] == "<#333>"
-    assert fields["Transcript salvo"] == "Sim"
-    assert fields["Desconto"] == "10%"
-    assert embed.footer.text == (
-        "NEXTBUY • Auditoria #42 • Código: order.payment_confirmed_manual_pix"
-    )
