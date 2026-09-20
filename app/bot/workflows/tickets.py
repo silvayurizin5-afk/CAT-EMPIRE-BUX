@@ -15,6 +15,7 @@ from app.services.audit import write_audit_log
 from app.services.calculator import format_brl
 from app.services.feedback import submit_feedback
 from app.services.feedback_cards import render_feedback_card
+from app.services.manual_payments import cancel_manual_pix_order
 from app.services.orders import mark_order_delivered
 
 
@@ -169,6 +170,15 @@ async def delete_order_ticket(
         except discord.HTTPException:
             transcript_saved = False
 
+        try:
+            await channel.delete(
+                reason=f"NEXTBUY: ticket excluído por {actor_discord_id}"
+            )
+        except discord.Forbidden:
+            return False, "O bot não tem permissão para excluir esse canal."
+        except discord.HTTPException:
+            return False, "O Discord recusou a exclusão do canal."
+
     product_summary = _order_name(items)
     async with SessionLocal() as session, session.begin():
         db_order = await session.scalar(
@@ -178,6 +188,18 @@ async def delete_order_ticket(
             return False, "Pedido não encontrado."
         if db_order.ticket_channel_id and int(db_order.ticket_channel_id) != channel_id:
             return False, "O ticket mudou enquanto a exclusão era processada."
+
+        if db_order.status == "pending":
+            await cancel_manual_pix_order(
+                session,
+                order_id=order_id,
+                actor_discord_id=actor_discord_id,
+                reason="ticket de pagamento excluído",
+            )
+            db_order = await session.get(Order, order_id)
+            if db_order is None:
+                return False, "Pedido não encontrado após cancelamento."
+
         db_order.ticket_channel_id = None
         await write_audit_log(
             session,
@@ -192,24 +214,10 @@ async def delete_order_ticket(
                 "customer_discord_id": user.discord_user_id,
                 "product_name": product_summary,
                 "amount_brl": str(order.total_credits),
-                "order_status": order.status,
+                "order_status": db_order.status,
                 "transcript_saved": transcript_saved,
             },
         )
-
-    if isinstance(channel, discord.TextChannel):
-        try:
-            await channel.delete(
-                reason=f"NEXTBUY: ticket excluído por {actor_discord_id}"
-            )
-        except discord.Forbidden:
-            return False, (
-                "O vínculo foi removido, mas o bot não tem permissão para excluir o canal."
-            )
-        except discord.HTTPException:
-            return False, (
-                "O vínculo foi removido, mas o Discord recusou a exclusão do canal."
-            )
 
     return True, f"Ticket **{channel_name}** excluído."
 
