@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from sqlalchemy import select
 
+from app.core.guild_guard import is_store_guild
 from app.db.models import GuildConfig
 from app.db.session import SessionLocal
 from app.services.feedback import list_pending_orders_for_feedback, submit_feedback
@@ -33,7 +34,11 @@ class FeedbackCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None:
+        if (
+            message.author.bot
+            or message.guild is None
+            or not is_store_guild(message.guild.id)
+        ):
             return
         async with SessionLocal() as session:
             config = await session.scalar(
