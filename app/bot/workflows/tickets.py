@@ -107,6 +107,171 @@ def _item_lines(items: list[OrderItem]) -> list[str]:
     return [f"- **{item.name_snapshot}** × `{item.quantity}`" for item in items]
 
 
+async def _save_ticket_transcript(
+    channel: discord.TextChannel,
+    *,
+    order_id: UUID,
+    config: GuildConfig | None,
+) -> bool:
+    if not config or not config.transcript_channel_id:
+        return False
+    target = channel.guild.get_channel(config.transcript_channel_id)
+    if not isinstance(target, discord.TextChannel):
+        return False
+    transcript = await render_channel_transcript(channel)
+    file = discord.File(
+        io.BytesIO(transcript),
+        filename=f"transcript-{str(order_id)[:8]}.html",
+    )
+    await target.send(
+        content=f"Transcript do pedido `{str(order_id)[:8]}` • canal {channel.name}",
+        file=file,
+    )
+    return True
+
+
+async def delete_order_ticket(
+    guild: discord.Guild,
+    *,
+    order_id: UUID,
+    actor_discord_id: int,
+    expected_channel_id: int | None = None,
+) -> tuple[bool, str]:
+    loaded = await _load_order(order_id)
+    if loaded is None:
+        return False, "Pedido não encontrado."
+
+    order, user, items, config = loaded
+    channel_id = int(order.ticket_channel_id or 0)
+    if expected_channel_id and channel_id and expected_channel_id != channel_id:
+        return False, "Esse ticket não corresponde mais ao canal selecionado."
+    if not channel_id:
+        return False, "Esse pedido não possui ticket ativo."
+
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        try:
+            fetched = await guild.fetch_channel(channel_id)
+            channel = fetched if isinstance(fetched, discord.TextChannel) else None
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            channel = None
+
+    transcript_saved = False
+    channel_name = f"canal-{channel_id}"
+    if isinstance(channel, discord.TextChannel):
+        channel_name = channel.name
+        try:
+            transcript_saved = await _save_ticket_transcript(
+                channel,
+                order_id=order_id,
+                config=config,
+            )
+        except discord.HTTPException:
+            transcript_saved = False
+
+    product_summary = _order_name(items)
+    async with SessionLocal() as session, session.begin():
+        db_order = await session.scalar(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+        if db_order is None:
+            return False, "Pedido não encontrado."
+        if db_order.ticket_channel_id and int(db_order.ticket_channel_id) != channel_id:
+            return False, "O ticket mudou enquanto a exclusão era processada."
+        db_order.ticket_channel_id = None
+        await write_audit_log(
+            session,
+            guild_id=guild.id,
+            actor_discord_id=actor_discord_id,
+            action="ticket.delete",
+            target_type="order",
+            target_id=str(order_id),
+            details={
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "customer_discord_id": user.discord_user_id,
+                "product_name": product_summary,
+                "amount_brl": str(order.total_credits),
+                "order_status": order.status,
+                "transcript_saved": transcript_saved,
+            },
+        )
+
+    if isinstance(channel, discord.TextChannel):
+        try:
+            await channel.delete(
+                reason=f"NEXTBUY: ticket excluído por {actor_discord_id}"
+            )
+        except discord.Forbidden:
+            return False, (
+                "O vínculo foi removido, mas o bot não tem permissão para excluir o canal."
+            )
+        except discord.HTTPException:
+            return False, (
+                "O vínculo foi removido, mas o Discord recusou a exclusão do canal."
+            )
+
+    return True, f"Ticket **{channel_name}** excluído."
+
+
+class TicketDeleteConfirmView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        order_id: UUID,
+        owner_id: int,
+        channel_id: int | None = None,
+    ) -> None:
+        super().__init__(timeout=90)
+        self.order_id = order_id
+        self.owner_id = owner_id
+        self.channel_id = channel_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message(
+            "Essa confirmação pertence a outra pessoa.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Confirmar exclusão", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        if interaction.guild is None or not await can_support(interaction):
+            await interaction.response.send_message("Sem permissão.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        ok, message = await delete_order_ticket(
+            interaction.guild,
+            order_id=self.order_id,
+            actor_discord_id=interaction.user.id,
+            expected_channel_id=self.channel_id,
+        )
+        try:
+            await interaction.edit_original_response(
+                content=("Ticket excluído com segurança." if ok else message),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        await interaction.response.edit_message(
+            content="Exclusão cancelada.",
+            view=None,
+        )
+
+
 class TicketStaffLayout(discord.ui.LayoutView):
     def __init__(
         self,
@@ -368,6 +533,7 @@ class TicketStaffView(discord.ui.View):
         self.processing.custom_id = f"nextbuy:ticket:{suffix}:processing"
         self.delivered.custom_id = f"nextbuy:ticket:{suffix}:delivered"
         self.close.custom_id = f"nextbuy:ticket:{suffix}:close"
+        self.delete.custom_id = f"nextbuy:ticket:{suffix}:delete"
 
     @discord.ui.button(
         label="Em atendimento",
@@ -453,20 +619,17 @@ class TicketStaffView(discord.ui.View):
         if not isinstance(interaction.channel, discord.TextChannel):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        transcript = await render_channel_transcript(interaction.channel)
         loaded = await _load_order(self.order_id)
         config = loaded[3] if loaded else None
-        if config and config.transcript_channel_id:
-            target = interaction.guild.get_channel(config.transcript_channel_id)
-            if isinstance(target, discord.TextChannel):
-                file = discord.File(
-                    io.BytesIO(transcript),
-                    filename=f"transcript-{str(self.order_id)[:8]}.html",
-                )
-                await target.send(
-                    content=f"Transcript do pedido `{str(self.order_id)[:8]}`",
-                    file=file,
-                )
+        transcript_saved = False
+        try:
+            transcript_saved = await _save_ticket_transcript(
+                interaction.channel,
+                order_id=self.order_id,
+                config=config,
+            )
+        except discord.HTTPException:
+            transcript_saved = False
         if loaded:
             _, user, _, _ = loaded
             member = interaction.guild.get_member(user.discord_user_id)
@@ -488,7 +651,33 @@ class TicketStaffView(discord.ui.View):
                     target_id=str(self.order_id),
                     details={
                         "channel_id": interaction.channel.id,
-                        "transcript_saved": bool(config and config.transcript_channel_id),
+                        "transcript_saved": transcript_saved,
                     },
                 )
         await interaction.followup.send("Ticket fechado e transcript processado.", ephemeral=True)
+
+    @discord.ui.button(
+        label="Excluir ticket",
+        style=discord.ButtonStyle.danger,
+        custom_id="ticket:delete",
+    )
+    async def delete(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if interaction.guild is None or not await can_support(interaction):
+            await interaction.response.send_message("Sem permissão.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("Canal inválido.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            (
+                "**Excluir permanentemente este ticket?**\n"
+                "O transcript será salvo antes da exclusão quando houver canal de transcript "
+                "configurado. Esta ação remove o canal do Discord."
+            ),
+            view=TicketDeleteConfirmView(
+                order_id=self.order_id,
+                owner_id=interaction.user.id,
+                channel_id=interaction.channel.id,
+            ),
+            ephemeral=True,
+        )
