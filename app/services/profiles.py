@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import ZERO, money
 from app.db.models import Order, OrderItem, Product, User
+from app.services.calculator import ROBUX_PRICE_PER_100
 
 ACTIVE_SPEND_STATUSES = ("paid", "processing", "delivered")
 ROBUX_TRACKED_PRODUCT_TYPES = {"robux", "gamepass", "game_pass"}
@@ -64,6 +65,8 @@ def _robux_from_order_item(
     quantity: int = 1,
     current_product_type: str | None = None,
     current_product_metadata: dict | None = None,
+    unit_price: object | None = None,
+    current_product_price: object | None = None,
 ) -> int:
     """Conta Robux somente para Game Pass e compras diretas de Robux.
 
@@ -83,6 +86,20 @@ def _robux_from_order_item(
         raw_amount = dict(current_product_metadata or {}).get("robux_amount")
 
     amount = _positive_int(raw_amount)
+
+    # Produtos diretos do tipo "robux" mais antigos podem não ter robux_amount
+    # congelado no metadata. Nesses casos, o preço unitário normal da NEXTBUY
+    # permite reconstruir a quantidade: R$ 2,90 = 100 Robux.
+    if amount <= 0 and product_type == "robux":
+        raw_price = unit_price if unit_price not in {None, ""} else current_product_price
+        try:
+            price = Decimal(str(raw_price))
+            inferred = price * Decimal("100") / ROBUX_PRICE_PER_100
+        except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
+            inferred = Decimal("0")
+        if inferred > 0 and inferred == inferred.to_integral_value():
+            amount = int(inferred)
+
     if amount <= 0:
         return 0
 
@@ -123,8 +140,10 @@ async def get_customer_profile(
                 OrderItem.name_snapshot,
                 OrderItem.metadata_json,
                 OrderItem.quantity,
+                OrderItem.unit_price,
                 Product.product_type,
                 Product.metadata_json.label("current_product_metadata"),
+                Product.price_credits.label("current_product_price"),
             )
             .join(Order, Order.id == OrderItem.order_id)
             .outerjoin(Product, Product.id == OrderItem.product_id)
@@ -141,12 +160,22 @@ async def get_customer_profile(
     recent_products: list[str] = []
     games: list[str] = []
     robux_purchased = 0
-    for item_name, metadata, quantity, product_type, product_metadata in item_rows:
+    for (
+        item_name,
+        metadata,
+        quantity,
+        unit_price,
+        product_type,
+        product_metadata,
+        product_price,
+    ) in item_rows:
         robux_purchased += _robux_from_order_item(
             metadata,
             quantity=quantity,
             current_product_type=product_type,
             current_product_metadata=product_metadata,
+            unit_price=unit_price,
+            current_product_price=product_price,
         )
         if item_name not in recent_products:
             recent_products.append(item_name)
@@ -187,8 +216,10 @@ async def list_leaderboard(
                 Order.user_id,
                 OrderItem.metadata_json,
                 OrderItem.quantity,
+                OrderItem.unit_price,
                 Product.product_type,
                 Product.metadata_json.label("current_product_metadata"),
+                Product.price_credits.label("current_product_price"),
             )
             .join(OrderItem, OrderItem.order_id == Order.id)
             .outerjoin(Product, Product.id == OrderItem.product_id)
@@ -200,7 +231,15 @@ async def list_leaderboard(
         )
     ).all()
     robux_by_user: dict[int, int] = {user_id: 0 for user_id in user_ids}
-    for user_id, metadata, quantity, product_type, product_metadata in item_rows:
+    for (
+        user_id,
+        metadata,
+        quantity,
+        unit_price,
+        product_type,
+        product_metadata,
+        product_price,
+    ) in item_rows:
         robux_by_user[int(user_id)] = robux_by_user.get(
             int(user_id), 0
         ) + _robux_from_order_item(
@@ -208,6 +247,8 @@ async def list_leaderboard(
             quantity=quantity,
             current_product_type=product_type,
             current_product_metadata=product_metadata,
+            unit_price=unit_price,
+            current_product_price=product_price,
         )
 
     return [
