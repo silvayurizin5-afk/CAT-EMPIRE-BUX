@@ -47,7 +47,7 @@ async def _build_staff_embed(
             ).all()
             lines = [
                 (
-                    f"`{str(order.id)[:8]}` • <@{user.discord_user_id}> • "
+                    f"<@{user.discord_user_id}> • "
                     f"**{order.status}** • <#{order.ticket_channel_id}>"
                 )
                 for order, user in rows
@@ -73,7 +73,7 @@ async def _build_staff_embed(
             ).all()
             lines = [
                 (
-                    f"`{str(order.id)[:8]}` • <@{user.discord_user_id}> • "
+                    f"<@{user.discord_user_id}> • "
                     f"**{order.total_credits:.2f} créditos**"
                     + (f" • <#{order.ticket_channel_id}>" if order.ticket_channel_id else "")
                 )
@@ -173,7 +173,7 @@ class RefundReasonModal(discord.ui.Modal, title="Confirmar reembolso"):
             await sync_customer_roles(member)
             try:
                 await member.send(
-                    f"Seu pedido `{str(self.order_id)[:8]}` foi reembolsado em "
+                    "Sua compra foi reembolsada em "
                     f"**{amount:.2f} créditos**. Motivo: {reason}"
                 )
             except (discord.Forbidden, discord.HTTPException):
@@ -192,7 +192,7 @@ class RefundReasonModal(discord.ui.Modal, title="Confirmar reembolso"):
                     pass
 
         await interaction.followup.send(
-            f"Pedido `{str(self.order_id)[:8]}` reembolsado. "
+            "Reembolso concluído. "
             f"**{amount:.2f} créditos** voltaram para o cliente.",
             ephemeral=True,
         )
@@ -202,7 +202,7 @@ class RefundOrderSelect(discord.ui.Select):
     def __init__(self, rows: list[tuple[Order, User]]) -> None:
         options = [
             discord.SelectOption(
-                label=f"{str(order.id)[:8]} • {order.total_credits:.2f} créditos"[:100],
+                label=f"R$ {order.total_credits:.2f} • cliente {user.discord_user_id}"[:100],
                 value=str(order.id),
                 description=f"Cliente {user.discord_user_id} • {order.status}"[:100],
             )
