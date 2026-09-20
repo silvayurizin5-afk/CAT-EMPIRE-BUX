@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import re
 from typing import Any
 
 from app.services.calculator import format_brl
@@ -139,6 +140,24 @@ def _format(template: str, values: dict[str, object]) -> str:
         return template.format(**values)
     except (KeyError, ValueError) as exc:
         raise ValueError(f"Template de entrega inválido: {exc}") from exc
+
+
+def sanitize_private_order_artifacts(value: str) -> str:
+    """Remove linhas residuais de templates antigos que exibiam ID interno do pedido."""
+    kept: list[str] = []
+    for line in str(value or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        plain = stripped.replace("**", "").replace("__", "").replace("`", "")
+        if re.fullmatch(
+            r"(?i)(?:nextbuy\s*[•|:\-]\s*)?(?:pedido|order|compra)?\s*[#:\-]?\s*",
+            plain,
+        ):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _format_percent(value: Decimal) -> str:
@@ -307,9 +326,15 @@ def render_delivery(
         rendered_products.append("Pedido sem itens cadastrados")
 
     values = {**common, "products": "\n\n".join(rendered_products)}
-    title = _format(str(config["title_template"]), values).strip()
-    body = _format(str(config["body_template"]), values).strip()
-    footer = _format(str(config["footer_template"]), values).strip()
+    title = sanitize_private_order_artifacts(
+        _format(str(config["title_template"]), values)
+    )
+    body = sanitize_private_order_artifacts(
+        _format(str(config["body_template"]), values)
+    )
+    footer = sanitize_private_order_artifacts(
+        _format(str(config["footer_template"]), values)
+    )
     lines = body.splitlines() if body else []
     return (
         title,
