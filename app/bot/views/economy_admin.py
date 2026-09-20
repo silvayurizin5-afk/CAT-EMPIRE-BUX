@@ -164,7 +164,7 @@ class EconomyResetConfirmView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
-            profile = await set_user_economy_target(
+            await set_user_economy_target(
                 session,
                 guild_id=interaction.guild.id,
                 discord_user_id=self.target_user_id,
