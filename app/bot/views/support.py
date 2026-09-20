@@ -72,7 +72,7 @@ class SupportPanel(CardLayout):
             title=options.panel_title,
             description=options.panel_description,
             image_url=options.banner_url or None,
-            accent_colour=int(options.color, 16),
+            accent_colour=0x7B2CBF,
             timeout=None,
         )
         button = discord.ui.Button(
@@ -164,7 +164,7 @@ class SupportControls(CardLayout):
             title=subject,
             description=welcome,
             lines=[description] if description else [],
-            accent_colour=color,
+            accent_colour=0x7B2CBF,
             footer="NEXTBUY • Atendimento privado",
             timeout=None,
         )
