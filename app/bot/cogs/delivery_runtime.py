@@ -51,6 +51,7 @@ _THUMBNAIL_PRODUCT_TEMPLATE = (
 _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
 _DELIVERY_BANNER_URL = "https://cdn.discordapp.com/attachments/1549241356743090288/1551378076057997322/ENTREGA-REALIZADA.gif?ex=6ab1c0ec&is=6ab06f6c&hm=93bb08903e51895f8cb222af1f6dbff4a46796651740b89fc622570f5b89250e&"
 
+
 def _configured_delivery_banner(
     raw_config: dict[str, object] | None,
 ) -> tuple[discord.File | None, str]:
