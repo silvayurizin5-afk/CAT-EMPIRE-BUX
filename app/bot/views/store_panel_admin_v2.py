@@ -274,7 +274,7 @@ class GameIconModal(discord.ui.Modal, title="Ícone do jogo"):
         if not key:
             await interaction.response.send_message("Informe o nome do jogo.", ephemeral=True)
             return
-        emoji = str(self.emoji).strip()
+        emoji = resolve_guild_emoji_aliases(str(self.emoji).strip(), interaction.guild)
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_store_panel(session, interaction.guild.id)
