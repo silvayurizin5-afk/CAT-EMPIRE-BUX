@@ -98,11 +98,13 @@ def _render_webp(
     frame_step: int,
 ) -> bytes:
     image = _open_animated(data)
-    source_frames = list(ImageSequence.Iterator(image))
-    durations = [
-        max(20, int(frame.info.get("duration", image.info.get("duration", 100)) or 100))
-        for frame in source_frames
-    ]
+    source_frames: list[Image.Image] = []
+    durations: list[int] = []
+    for frame in ImageSequence.Iterator(image):
+        durations.append(
+            max(20, int(frame.info.get("duration", image.info.get("duration", 100)) or 100))
+        )
+        source_frames.append(frame.convert("RGBA").copy())
 
     frames: list[Image.Image] = []
     output_durations: list[int] = []
@@ -110,7 +112,7 @@ def _render_webp(
     height = max(1, int(image.height * scale))
 
     for index in range(0, len(source_frames), frame_step):
-        frame = source_frames[index].convert("RGBA")
+        frame = source_frames[index]
         if frame.size != (width, height):
             frame = frame.resize((width, height), Image.Resampling.LANCZOS)
         frames.append(frame)
