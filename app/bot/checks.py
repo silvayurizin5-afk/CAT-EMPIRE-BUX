@@ -1,6 +1,7 @@
 import discord
 from sqlalchemy import select
 
+from app.core.guild_guard import is_store_guild
 from app.db.models import GuildConfig
 from app.db.session import SessionLocal
 
@@ -10,7 +11,11 @@ def _has_role(member: discord.Member, role_id: int | None) -> bool:
 
 
 async def can_admin(interaction: discord.Interaction) -> bool:
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+    if (
+        interaction.guild is None
+        or not is_store_guild(interaction.guild.id)
+        or not isinstance(interaction.user, discord.Member)
+    ):
         return False
     member = interaction.user
     if member.id == interaction.guild.owner_id or member.guild_permissions.administrator:
