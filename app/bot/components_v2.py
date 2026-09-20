@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 import discord
 
-DEFAULT_ACCENT = discord.Colour.from_rgb(43, 45, 49)
+DEFAULT_ACCENT = discord.Colour(0x7B2CBF)
 
 
 def format_percent(value) -> str:
@@ -62,7 +62,7 @@ class CardLayout(discord.ui.LayoutView):
             children.append(discord.ui.Separator())
             children.append(discord.ui.TextDisplay(f"-# {footer}"))
 
-        self.container = discord.ui.Container(*children, accent_colour=accent_colour)
+        self.container = discord.ui.Container(*children, accent_colour=DEFAULT_ACCENT)
         self.add_item(self.container)
 
 
