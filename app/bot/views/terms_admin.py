@@ -17,6 +17,11 @@ def _terms_lines(terms: TermsDocument) -> list[str]:
         f"**Versão:** `{terms.version}`",
         f"**Status:** `{'Ativo' if terms.active else 'Desativado'}`",
         f"**Emoji:** {terms.emoji or '—'}",
+        (
+            f"**Submensagem ephemeral:** {terms.ephemeral_message}"
+            if terms.ephemeral_message
+            else "**Submensagem ephemeral:** —"
+        ),
     ]
 
 
@@ -50,9 +55,17 @@ class TermsEditModal(discord.ui.Modal):
             max_length=128,
             default=(terms.emoji or "")[:128],
         )
+        self.ephemeral_input = discord.ui.TextInput(
+            label="Submensagem ephemeral ao selecionar",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1800,
+            default=(terms.ephemeral_message or "")[:1800],
+        )
         self.add_item(self.title_input)
         self.add_item(self.content_input)
         self.add_item(self.emoji_input)
+        self.add_item(self.ephemeral_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -80,6 +93,7 @@ class TermsEditModal(discord.ui.Modal):
                 title=title,
                 content=content,
                 emoji=str(self.emoji_input),
+                ephemeral_message=str(self.ephemeral_input),
             )
             updated.active = was_active
             await write_audit_log(
