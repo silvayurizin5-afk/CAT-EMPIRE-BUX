@@ -210,7 +210,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
             title="NEXTBUY • Entregas",
             description="Configure livremente a mensagem publicada quando um pedido é entregue.",
             lines=[
-                "**Gerais:** `{client}`, `{order}`, `{order_short}`, `{products}`",
+                "**Gerais:** `{client}`, `{products}`",
                 "**Emojis:** `{delivery}`, `{arrow}`, `{user}`, `{separator}`, `{verified}`, `{order_icon}`, `{game_emoji}`, `{product_emoji}`, `{discount_emoji}`",
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
