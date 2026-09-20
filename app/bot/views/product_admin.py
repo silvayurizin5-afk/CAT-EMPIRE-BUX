@@ -58,11 +58,14 @@ def _product_lines(product: Product) -> list[str]:
     if _tracks_robux(product):
         amount = _configured_robux_amount(product)
         label = "Valor da Game Pass" if _is_gamepass(product) else "Robux por unidade"
-        lines.append(
-            f"**{label}:** `{amount} Robux`"
-            if amount is not None
-            else f"**{label}:** `automático pelo preço`"
-        )
+        if amount is not None:
+            lines.append(f"**{label}:** `{amount} Robux`")
+        elif _is_gamepass(product):
+            lines.append(
+                f"**{label}:** `não configurado — não entra no total de Robux`"
+            )
+        else:
+            lines.append(f"**{label}:** `automático pelo preço/cotação`")
     return lines
 
 
