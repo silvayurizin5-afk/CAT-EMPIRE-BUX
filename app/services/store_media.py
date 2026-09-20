@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ import httpx
 from PIL import Image, ImageSequence
 
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+_PREFERRED_PANEL_BYTES = 3 * 1024 * 1024
 _CACHE_SIZE = 4
 _CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
 
@@ -33,6 +35,24 @@ class PreparedStoreBanner:
 
     def to_file(self) -> discord.File:
         return discord.File(io.BytesIO(self.data), filename=self.filename)
+
+
+def banner_attachment_prefix(source_url: str) -> str:
+    digest = hashlib.sha256(source_url.encode("utf-8")).hexdigest()[:12]
+    return f"nextbuy-banner-{digest}"
+
+
+def reusable_banner_attachment_url(
+    source_url: str | None,
+    attachments: list[discord.Attachment] | tuple[discord.Attachment, ...],
+) -> str | None:
+    if not source_url or not _looks_like_gif(source_url):
+        return None
+    prefix = banner_attachment_prefix(source_url)
+    for attachment in attachments:
+        if attachment.filename in {f"{prefix}.gif", f"{prefix}.webp"}:
+            return f"attachment://{attachment.filename}"
+    return None
 
 
 def _looks_like_gif(url: str | None) -> bool:
@@ -184,8 +204,10 @@ async def prepare_store_banner(
         return None
 
     assert source_url is not None
-    # Reserva uma pequena margem para o multipart/Discord.
-    target_bytes = max(2 * 1024 * 1024, int(upload_limit) - 256 * 1024)
+    # Mantém o banner pequeno mesmo quando o servidor aceita uploads maiores.
+    # Isso reduz bastante o tempo de publicação/edição do painel.
+    discord_cap = max(512 * 1024, int(upload_limit) - 256 * 1024)
+    target_bytes = min(_PREFERRED_PANEL_BYTES, discord_cap)
     cache_key = (source_url, target_bytes)
     cached = _CACHE.get(cache_key)
     if cached is not None:
@@ -195,10 +217,12 @@ async def prepare_store_banner(
     raw = await _download_image(source_url)
     _open_animated(raw)
 
+    prefix = banner_attachment_prefix(source_url)
+
     if len(raw) <= target_bytes:
         prepared = PreparedStoreBanner(
             data=raw,
-            filename="nextbuy-banner.gif",
+            filename=f"{prefix}.gif",
             optimized=False,
             source_size=len(raw),
         )
@@ -210,7 +234,7 @@ async def prepare_store_banner(
         )
         prepared = PreparedStoreBanner(
             data=encoded,
-            filename="nextbuy-banner.webp",
+            filename=f"{prefix}.webp",
             optimized=True,
             source_size=len(raw),
         )
