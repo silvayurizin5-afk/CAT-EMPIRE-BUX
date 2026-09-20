@@ -3,6 +3,7 @@ import discord
 from app.bot.components_v2 import CardLayout, add_select_row
 from app.bot.views.admin_feedback import FeedbackSettingsModal
 from app.bot.views.admin_forms import ConfigTargetView, RankRoleView, TermsModal
+from app.bot.views.economy_admin import send_economy_management
 from app.bot.views.embed_builder import send_embed_builder
 from app.bot.views.rank_admin import send_rank_tier_management
 from app.bot.views.store_panel_admin import send_store_panel_admin
@@ -39,6 +40,11 @@ ADMIN_ACTIONS = (
     ("manage_terms", "Gerenciar termos", "Editar, ativar ou desativar termos"),
     ("new_rank", "Criar faixa de cliente", "Vincular faixa e cargo"),
     ("manage_ranks", "Gerenciar faixas", "Editar metas e ativação"),
+    (
+        "manage_economy",
+        "Gerenciar economia",
+        "Revisar, configurar ou zerar R$, Robux e compras de um usuário",
+    ),
     ("publish_ranking", "Publicar ranking", "Publicar ou atualizar no canal atual"),
     ("roles", "Configurar cargos", "Administrador, suporte, entrega e cliente"),
     ("channels", "Configurar canais", "Tickets, entregas, ranking e logs"),
@@ -187,6 +193,10 @@ class CompactAdminPanelView(discord.ui.LayoutView):
 
         if action == "manage_ranks":
             await send_rank_tier_management(interaction)
+            return
+
+        if action == "manage_economy":
+            await send_economy_management(interaction)
             return
 
         if action == "embed_builder":
