@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,10 +10,12 @@ from app.db.models import (
     Order,
     OrderItem,
     Product,
+    RobuxRate,
     User,
     UserEconomyAdjustment,
 )
 from app.services.calculator import ROBUX_PRICE_PER_100
+from app.services.catalog import DEFAULT_ROBUX_PRICE_PER_ROBUX, DEFAULT_ROBUX_RATE_CODE
 from app.services.users import get_or_create_user
 
 ACTIVE_SPEND_STATUSES = ("paid", "processing", "delivered")
@@ -177,9 +179,6 @@ async def _adjusted_spend_rows(session: AsyncSession, guild_id: int):
                 func.coalesce(UserEconomyAdjustment.spent_adjustment, 0).label(
                     "spent_adjustment"
                 ),
-                func.coalesce(UserEconomyAdjustment.robux_adjustment, 0).label(
-                    "robux_adjustment"
-                ),
                 func.coalesce(UserEconomyAdjustment.orders_adjustment, 0).label(
                     "orders_adjustment"
                 ),
@@ -236,78 +235,26 @@ async def _load_item_rows(
     return list((await session.execute(statement)).mappings().all())
 
 
-async def _slug_product_map(
-    session: AsyncSession,
-    *,
-    guild_id: int,
-    item_rows,
-) -> dict[str, Product]:
-    slugs = {
-        str(dict(row["metadata"] or {}).get("product_slug") or "").strip()
-        for row in item_rows
-        if row["current_product_type"] is None
-    }
-    slugs.discard("")
-    if not slugs:
-        return {}
-    products = list(
-        (
-            await session.scalars(
-                select(Product).where(
-                    Product.guild_id == guild_id,
-                    Product.slug.in_(slugs),
-                )
-            )
-        ).all()
-    )
-    return {product.slug: product for product in products}
-
-
-async def _robux_totals_for_users(
-    session: AsyncSession,
-    *,
-    guild_id: int,
-    user_ids: list[int],
-    newest_first: bool = False,
-) -> tuple[dict[int, int], list]:
-    rows = await _load_item_rows(
-        session,
-        guild_id=guild_id,
-        user_ids=user_ids,
-        newest_first=newest_first,
-    )
-    slug_products = await _slug_product_map(
-        session,
-        guild_id=guild_id,
-        item_rows=rows,
-    )
-    totals = {user_id: 0 for user_id in user_ids}
-
-    for row in rows:
-        metadata = dict(row["metadata"] or {})
-        current_type = row["current_product_type"]
-        current_metadata = row["current_product_metadata"]
-        current_price = row["current_product_price"]
-
-        if current_type is None:
-            slug = str(metadata.get("product_slug") or "").strip()
-            fallback_product = slug_products.get(slug)
-            if fallback_product is not None:
-                current_type = fallback_product.product_type
-                current_metadata = fallback_product.metadata_json
-                current_price = fallback_product.price_credits
-
-        user_id = int(row["user_id"])
-        totals[user_id] = totals.get(user_id, 0) + _robux_from_order_item(
-            metadata,
-            quantity=row["quantity"],
-            item_name=row["item_name"],
-            current_product_type=current_type,
-            current_product_metadata=current_metadata,
-            unit_price=row["unit_price"],
-            current_product_price=current_price,
+async def _ranking_robux_rate(session: AsyncSession, guild_id: int) -> Decimal:
+    """Prefer the active default rate, then the first active store rate."""
+    rate = await session.scalar(
+        select(RobuxRate.price_per_robux)
+        .where(RobuxRate.guild_id == guild_id, RobuxRate.active.is_(True))
+        .order_by(
+            (RobuxRate.code == DEFAULT_ROBUX_RATE_CODE).desc(),
+            RobuxRate.sort_order,
+            RobuxRate.id,
         )
-    return totals, rows
+        .limit(1)
+    )
+    return Decimal(str(rate)) if rate is not None else DEFAULT_ROBUX_PRICE_PER_ROBUX
+
+
+def _robux_from_total_spent(total_spent: Decimal, price_per_robux: Decimal) -> int:
+    """Convert accumulated BRL once; never round individual purchases."""
+    if not price_per_robux.is_finite() or price_per_robux <= 0:
+        raise ValueError("A cotação de Robux deve ser positiva e finita.")
+    return int((max(ZERO, total_spent) / price_per_robux).to_integral_value(rounding=ROUND_DOWN))
 
 
 async def get_economy_base(
@@ -326,15 +273,11 @@ async def get_economy_base(
     ).one_or_none()
     base_spent = money(row.total_spent if row else ZERO)
     base_orders = int(row.completed_orders if row else 0)
-    robux_by_user, _ = await _robux_totals_for_users(
-        session,
-        guild_id=guild_id,
-        user_ids=[user_id],
-    )
+    rate = await _ranking_robux_rate(session, guild_id)
     return EconomyBase(
         total_spent=base_spent,
         completed_orders=base_orders,
-        robux_purchased=robux_by_user.get(user_id, 0),
+        robux_purchased=_robux_from_total_spent(base_spent, rate),
     )
 
 
@@ -344,14 +287,13 @@ async def set_user_economy_target(
     guild_id: int,
     discord_user_id: int,
     total_spent: Decimal,
-    robux_purchased: int,
     completed_orders: int,
 ) -> CustomerProfile:
     target_spent = money(total_spent)
     if target_spent < ZERO:
         raise ValueError("O total gasto não pode ser negativo.")
-    if robux_purchased < 0 or completed_orders < 0:
-        raise ValueError("Robux e quantidade de compras não podem ser negativos.")
+    if completed_orders < 0:
+        raise ValueError("A quantidade de compras não pode ser negativa.")
 
     user = await get_or_create_user(session, discord_user_id)
     base = await get_economy_base(session, guild_id=guild_id, user_id=user.id)
@@ -367,7 +309,8 @@ async def set_user_economy_target(
         session.add(adjustment)
 
     adjustment.spent_adjustment = money(target_spent - base.total_spent)
-    adjustment.robux_adjustment = int(robux_purchased - base.robux_purchased)
+    # Legacy column is retained for schema compatibility; Robux always derives from BRL.
+    adjustment.robux_adjustment = 0
     adjustment.orders_adjustment = int(completed_orders - base.completed_orders)
     await session.flush()
     return await get_customer_profile(
@@ -424,7 +367,6 @@ async def get_customer_profile(
     if user_economy is None:
         total_spent = ZERO
         completed_orders = 0
-        robux_adjustment = 0
     else:
         total_spent = max(
             ZERO,
@@ -438,15 +380,15 @@ async def get_customer_profile(
             int(user_economy["base_orders"])
             + int(user_economy["orders_adjustment"]),
         )
-        robux_adjustment = int(user_economy["robux_adjustment"])
 
-    robux_by_user, item_rows = await _robux_totals_for_users(
+    item_rows = await _load_item_rows(
         session,
         guild_id=guild_id,
         user_ids=[user.id],
         newest_first=True,
     )
-    robux_purchased = max(0, robux_by_user.get(user.id, 0) + robux_adjustment)
+    rate = await _ranking_robux_rate(session, guild_id)
+    robux_purchased = _robux_from_total_spent(total_spent, rate)
 
     leaderboard_position: int | None = None
     if total_spent > ZERO or robux_purchased > 0:
@@ -492,12 +434,7 @@ async def list_leaderboard(
     if not economy_rows:
         return []
 
-    user_ids = [int(row["user_id"]) for row in economy_rows]
-    robux_by_user, _ = await _robux_totals_for_users(
-        session,
-        guild_id=guild_id,
-        user_ids=user_ids,
-    )
+    rate = await _ranking_robux_rate(session, guild_id)
 
     entries: list[tuple[int, LeaderboardEntry]] = []
     for row in economy_rows:
@@ -513,10 +450,7 @@ async def list_leaderboard(
             0,
             int(row["base_orders"]) + int(row["orders_adjustment"]),
         )
-        robux_purchased = max(
-            0,
-            robux_by_user.get(user_id, 0) + int(row["robux_adjustment"]),
-        )
+        robux_purchased = _robux_from_total_spent(total_spent, rate)
         if total_spent <= ZERO and robux_purchased <= 0 and completed_orders <= 0:
             continue
         entries.append(

@@ -87,7 +87,7 @@ DEFAULT_DELIVERY_CONFIG: dict[str, object] = {
     "show_image": True,
     "banner_enabled": True,
     "banner_source": "local",
-    "banner_mode": "static",
+    "banner_mode": "animated",
     "banner_url": "",
     "delivery_emoji": VERIFY_EMOJI,
     "arrow_emoji": ARROW_EMOJI,
@@ -110,6 +110,8 @@ def effective_delivery_config(raw: dict[str, Any] | None) -> dict[str, object]:
         return merged
 
     for key in DEFAULT_DELIVERY_CONFIG:
+        if key.startswith("banner_"):
+            continue  # The delivery banner is always the bundled animated GIF.
         if key not in raw or raw[key] is None:
             continue
         value = raw[key]

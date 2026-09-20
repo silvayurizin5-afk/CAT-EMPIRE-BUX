@@ -59,12 +59,6 @@ class EconomyConfigureModal(discord.ui.Modal, title="Configurar economia do usu√
             max_length=20,
             placeholder="Ex: 365,50",
         )
-        self.robux = discord.ui.TextInput(
-            label="Robux contabilizados",
-            default=str(profile.robux_purchased),
-            max_length=18,
-            placeholder="Ex: 13000",
-        )
         self.orders = discord.ui.TextInput(
             label="Compras contabilizadas",
             default=str(profile.completed_orders),
@@ -72,7 +66,6 @@ class EconomyConfigureModal(discord.ui.Modal, title="Configurar economia do usu√
             placeholder="Ex: 25",
         )
         self.add_item(self.total_spent)
-        self.add_item(self.robux)
         self.add_item(self.orders)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -81,13 +74,11 @@ class EconomyConfigureModal(discord.ui.Modal, title="Configurar economia do usu√
             return
 
         raw_spent = str(self.total_spent).strip().replace(",", ".")
-        raw_robux = str(self.robux).strip()
         raw_orders = str(self.orders).strip()
         try:
             spent = Decimal(raw_spent)
-            robux = int(raw_robux)
             orders = int(raw_orders)
-            if spent < 0 or robux < 0 or orders < 0:
+            if not spent.is_finite() or spent < 0 or orders < 0:
                 raise ValueError
         except (InvalidOperation, ValueError):
             await interaction.response.send_message(
@@ -103,7 +94,6 @@ class EconomyConfigureModal(discord.ui.Modal, title="Configurar economia do usu√
                 guild_id=interaction.guild.id,
                 discord_user_id=self.target_user_id,
                 total_spent=spent,
-                robux_purchased=robux,
                 completed_orders=orders,
             )
             await write_audit_log(
@@ -169,7 +159,6 @@ class EconomyResetConfirmView(discord.ui.View):
                 guild_id=interaction.guild.id,
                 discord_user_id=self.target_user_id,
                 total_spent=Decimal("0"),
-                robux_purchased=0,
                 completed_orders=0,
             )
             await write_audit_log(
@@ -370,8 +359,8 @@ class EconomyManagementLayout(discord.ui.LayoutView):
             ),
             lines=[
                 "- **R$ gasto:** soma de pedidos pagos/processando/entregues.",
-                "- **Robux:** compras diretas de Robux + valor em Robux das Game Pass.",
-                "- **Itens comuns:** continuam somando somente no total em R$.",
+                "- **Robux:** total gasto em R$ √∑ cota√ß√£o atual da loja, arredondado para baixo no final.",
+                "- **Todos os produtos** entram na convers√£o; ajustes em R$ recalculam os Robux.",
             ],
             footer="NEXTBUY ‚Ä¢ Economia",
             timeout=300,
