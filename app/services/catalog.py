@@ -191,6 +191,7 @@ async def upsert_terms(
     title: str,
     content: str,
     emoji: str | None,
+    ephemeral_message: str = "",
 ) -> TermsDocument:
     normalized_code = code.strip().lower()
     terms = await session.scalar(
@@ -211,6 +212,7 @@ async def upsert_terms(
         terms.version += 1
     terms.title = title.strip()
     terms.content = content.strip()
+    terms.ephemeral_message = (ephemeral_message or "").strip()
     terms.emoji = (emoji or "").strip() or None
     terms.active = True
     await session.flush()
