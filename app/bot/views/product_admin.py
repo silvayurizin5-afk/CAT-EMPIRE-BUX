@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.emoji import select_option_emoji
 from app.bot.workflows.leaderboard import refresh_leaderboard
-from app.db.models import OrderItem, Product
+from app.db.models import Order, OrderItem, Product
 from app.db.session import SessionLocal
 from app.services.calculator import format_brl
 from app.services.catalog import (
@@ -260,16 +260,30 @@ class ProductRobuxValueModal(discord.ui.Modal, title="Valor em Robux do produto"
                 old_items = list(
                     (
                         await session.scalars(
-                            select(OrderItem).where(OrderItem.product_id == product.id)
+                            select(OrderItem)
+                            .join(Order, Order.id == OrderItem.order_id)
+                            .where(
+                                Order.guild_id == interaction.guild.id,
+                                (
+                                    (OrderItem.product_id == product.id)
+                                    | OrderItem.product_id.is_(None)
+                                ),
+                            )
                         )
                     ).all()
                 )
                 for item in old_items:
                     item_metadata = dict(item.metadata_json or {})
+                    same_product = item.product_id == product.id or (
+                        str(item_metadata.get("product_slug") or "").strip() == product.slug
+                    )
+                    if not same_product:
+                        continue
                     if item_metadata.get("robux_amount") not in (None, "", 0, "0"):
                         continue
                     item_metadata["robux_amount"] = amount
                     item_metadata.setdefault("product_type", product.product_type)
+                    item_metadata.setdefault("product_slug", product.slug)
                     item.metadata_json = item_metadata
                     backfilled += 1
 
