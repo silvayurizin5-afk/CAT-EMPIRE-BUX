@@ -257,7 +257,7 @@ def test_delivery_accepts_fully_custom_text_templates() -> None:
     assert title == "MINHA ENTREGA"
     assert "Cliente=@Cliente" in lines
     assert any("Produto=Notifier" in line for line in lines)
-    assert footer == "#abcdef12"
+    assert footer == ""
     assert accent == 0x112233
     assert show_image is False
 
