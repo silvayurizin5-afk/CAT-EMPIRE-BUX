@@ -1,9 +1,12 @@
 import logging
 from decimal import Decimal, InvalidOperation
+from uuid import UUID
 
 import discord
+from sqlalchemy import select
 from discord.ext import commands, tasks
 
+from app.db.models import Order, OrderItem, User
 from app.db.session import SessionLocal
 from app.services.audit import (
     PendingAuditDelivery,
@@ -28,6 +31,10 @@ _ACTIONS: dict[str, tuple[str, str]] = {
     "order.delivered": ("Pedido entregue", "O pedido foi marcado como entregue."),
     "ticket.open": ("Ticket aberto", "Um canal privado de atendimento foi criado."),
     "ticket.close": ("Ticket fechado", "O atendimento foi encerrado e o ticket foi fechado."),
+    "ticket.delete": (
+        "Ticket excluído",
+        "O canal do ticket foi excluído permanentemente.",
+    ),
 }
 
 _DETAIL_LABELS = {
@@ -56,6 +63,8 @@ _DETAIL_LABELS = {
     "new_status": "Novo status",
     "automatic_reminders": "Lembretes automáticos",
     "emoji": "Emoji",
+    "channel_name": "Canal",
+    "order_status": "Status",
 }
 
 
@@ -90,19 +99,78 @@ def _format_detail(key: str, value) -> str:
     return str(value)
 
 
+def _status_label(status: str) -> str:
+    return {
+        "pending": "Aguardando pagamento",
+        "paid": "Pago",
+        "processing": "Em atendimento",
+        "delivered": "Entregue",
+        "cancelled": "Cancelado",
+    }.get(status, status.replace("_", " ").title())
+
+
+async def _load_order_context(
+    item: PendingAuditDelivery,
+    guild: discord.Guild,
+) -> dict[str, object] | None:
+    if item.target_type != "order" or not item.target_id:
+        return None
+    try:
+        order_id = UUID(item.target_id)
+    except ValueError:
+        return None
+
+    async with SessionLocal() as session:
+        row = (
+            await session.execute(
+                select(Order, User)
+                .join(User, User.id == Order.user_id)
+                .where(Order.id == order_id, Order.guild_id == guild.id)
+            )
+        ).first()
+        if row is None:
+            return None
+        order, user = row
+        items = list(
+            (
+                await session.scalars(
+                    select(OrderItem)
+                    .where(OrderItem.order_id == order.id)
+                    .order_by(OrderItem.id)
+                )
+            ).all()
+        )
+
+    member = guild.get_member(user.discord_user_id)
+    display_name = member.display_name if member is not None else "Usuário"
+    products = [
+        f"{order_item.name_snapshot} × {order_item.quantity}"
+        for order_item in items
+    ] or ["Pedido sem itens"]
+    return {
+        "customer_id": user.discord_user_id,
+        "customer_name": display_name,
+        "products": products,
+        "total": order.total_credits,
+        "status": order.status,
+        "channel_id": order.ticket_channel_id or item.details.get("channel_id"),
+    }
+
+
 def _target_label(item: PendingAuditDelivery) -> tuple[str, str] | None:
     if not item.target_id:
         return None
-    short = item.target_id[:8]
-    if item.target_type == "order":
-        return "Pedido", f"`#{short}`"
-    if item.target_type == "ticket":
-        return "Ticket", f"`#{short}`"
+    if item.target_type in {"order", "ticket"}:
+        return None
     label = (item.target_type or "Registro").replace("_", " ").title()
     return label, f"`{item.target_id}`"
 
 
-def build_audit_embed(item: PendingAuditDelivery) -> discord.Embed:
+def build_audit_embed(
+    item: PendingAuditDelivery,
+    *,
+    order_context: dict[str, object] | None = None,
+) -> discord.Embed:
     title, description = _ACTIONS.get(
         item.action,
         (item.action.replace("_", " ").replace(".", " • ").title(), "Evento registrado pela NEXTBUY."),
@@ -120,15 +188,45 @@ def build_audit_embed(item: PendingAuditDelivery) -> discord.Embed:
         inline=True,
     )
 
+    if order_context is not None:
+        customer_id = int(order_context["customer_id"])
+        customer_name = str(order_context["customer_name"])
+        products = list(order_context.get("products") or [])
+        channel_id = order_context.get("channel_id")
+        channel_text = f"<#{channel_id}>" if channel_id else "Canal já removido"
+        embed.add_field(
+            name="Usuário",
+            value=f"<@{customer_id}> `{customer_name} ({customer_id})`",
+            inline=False,
+        )
+        detail_lines = [
+            f"**Produto(s):** {', '.join(str(product) for product in products)}",
+            f"**Valor:** {_format_money(order_context['total'])}",
+            f"**Status:** {_status_label(str(order_context['status']))}",
+            f"**Canal:** {channel_text}",
+        ]
+        embed.add_field(
+            name="Detalhes",
+            value="\n".join(detail_lines)[:1024],
+            inline=False,
+        )
+
     target = _target_label(item)
     if target is not None:
         embed.add_field(name=target[0], value=target[1], inline=True)
 
     known_keys: set[str] = set()
+    contextual_keys = (
+        {"customer_discord_id", "channel_id", "channel_name", "amount", "amount_brl", "order_status", "product_name"}
+        if order_context is not None
+        else set()
+    )
     for key, label in _DETAIL_LABELS.items():
         if key not in item.details:
             continue
         known_keys.add(key)
+        if key in contextual_keys:
+            continue
         embed.add_field(
             name=label,
             value=_format_detail(key, item.details[key])[:1024],
@@ -143,9 +241,7 @@ def build_audit_embed(item: PendingAuditDelivery) -> discord.Embed:
     if extras:
         embed.add_field(name="Informações adicionais", value="\n".join(extras)[:1024], inline=False)
 
-    embed.set_footer(
-        text=f"NEXTBUY • Auditoria #{item.audit_log_id} • Código: {item.action}"[:2048]
-    )
+    embed.set_footer(text="NEXTBUY • Auditoria")
     return embed
 
 
@@ -178,9 +274,11 @@ class AuditLogsCog(commands.Cog):
                 )
             return
 
+        order_context = await _load_order_context(item, guild)
+
         try:
             await channel.send(
-                embed=build_audit_embed(item),
+                embed=build_audit_embed(item, order_context=order_context),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException as exc:
