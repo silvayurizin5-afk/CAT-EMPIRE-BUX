@@ -106,9 +106,14 @@ def _robux_from_order_item(
         snapshot.get("product_type") or current_product_type
     )
 
-    # Pedidos antigos de Robux por cotação nem sempre gravavam product_type,
-    # mas normalmente possuem robux_amount/price_per_robux ou "123 Robux" no nome.
-    if product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
+    # Um tipo explícito como "item" sempre vence qualquer metadata ruim antiga:
+    # itens comuns jamais entram no total de Robux.
+    if product_type and product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
+        return 0
+
+    # Pedidos antigos de Robux por cotação nem sempre gravavam product_type.
+    # Só aplicamos heurísticas quando o tipo realmente está ausente.
+    if not product_type:
         if snapshot.get("robux_amount") not in {None, "", 0, "0"}:
             product_type = "robux"
         elif snapshot.get("price_per_robux") not in {None, "", 0, "0"}:
