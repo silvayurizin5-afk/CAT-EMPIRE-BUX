@@ -6,6 +6,7 @@ import discord
 from discord.ext import commands
 from sqlalchemy import select
 
+from app.core.guild_guard import is_store_guild
 from app.db.models import Order, OrderItem, User
 from app.db.session import SessionLocal
 from app.services.ticket_settings import (
@@ -27,7 +28,11 @@ class TicketAutomationCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
-        if not isinstance(channel, discord.TextChannel) or not channel.topic:
+        if (
+            not isinstance(channel, discord.TextChannel)
+            or not is_store_guild(channel.guild.id)
+            or not channel.topic
+        ):
             return
         match = _TOPIC.fullmatch(channel.topic.strip())
         if match is None:
