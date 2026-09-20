@@ -202,8 +202,8 @@ def validate_delivery_templates(config: dict[str, object]) -> None:
         "box": BOX_EMOJI,
         "client": "@Cliente",
         "products": "Produto",
-        "order": "00000000-0000-0000-0000-000000000000",
-        "order_short": "00000000",
+        "order": "",
+        "order_short": "",
         "product": "VIP",
         "game": "Jogo",
         "game_or_product": "Jogo",
@@ -290,8 +290,8 @@ def render_delivery(
         "member": str(config["member_emoji"]),
         "box": str(config["box_emoji"]),
         "client": client_mention,
-        "order": str(order_id),
-        "order_short": str(order_id)[:8],
+        "order": "",
+        "order_short": "",
     }
 
     product_template = str(config["product_template"])
