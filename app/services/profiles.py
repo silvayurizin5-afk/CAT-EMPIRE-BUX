@@ -1,15 +1,24 @@
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import ZERO, money
-from app.db.models import Order, OrderItem, Product, User
+from app.db.models import (
+    Order,
+    OrderItem,
+    Product,
+    User,
+    UserEconomyAdjustment,
+)
 from app.services.calculator import ROBUX_PRICE_PER_100
+from app.services.users import get_or_create_user
 
 ACTIVE_SPEND_STATUSES = ("paid", "processing", "delivered")
 ROBUX_TRACKED_PRODUCT_TYPES = {"robux", "gamepass", "game_pass"}
+_ROBUX_IN_NAME_RE = re.compile(r"(?<!\d)(\d[\d\s.,]*)\s*robux\b", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -25,6 +34,13 @@ class CustomerProfile:
 @dataclass(slots=True)
 class LeaderboardEntry:
     discord_user_id: int
+    total_spent: Decimal
+    completed_orders: int
+    robux_purchased: int
+
+
+@dataclass(slots=True)
+class EconomyBase:
     total_spent: Decimal
     completed_orders: int
     robux_purchased: int
@@ -59,37 +75,71 @@ def _positive_int(value: object) -> int:
     return int(parsed)
 
 
+def _robux_from_name(value: object) -> int:
+    match = _ROBUX_IN_NAME_RE.search(str(value or ""))
+    if match is None:
+        return 0
+    digits = re.sub(r"\D", "", match.group(1))
+    return int(digits) if digits else 0
+
+
 def _robux_from_order_item(
     metadata: dict | None,
     *,
     quantity: int = 1,
+    item_name: str | None = None,
     current_product_type: str | None = None,
     current_product_metadata: dict | None = None,
     unit_price: object | None = None,
     current_product_price: object | None = None,
 ) -> int:
-    """Conta Robux somente para Game Pass e compras diretas de Robux.
+    """Conta Robux de Game Pass e compras diretas de Robux.
 
-    Itens comuns atualizam apenas o valor gasto em reais, mesmo que algum metadata
-    antigo contenha acidentalmente a chave robux_amount.
+    A prioridade é sempre o snapshot histórico. Para pedidos antigos, o cálculo
+    consegue recuperar dados pelo produto atual, pela cotação congelada, pelo
+    nome do item e, por último, pelo preço normal de Robux da NEXTBUY.
     """
 
     snapshot = dict(metadata or {})
+    current_metadata = dict(current_product_metadata or {})
     product_type = _normalize_product_type(
         snapshot.get("product_type") or current_product_type
     )
+
+    # Pedidos antigos de Robux por cotação nem sempre gravavam product_type,
+    # mas normalmente possuem robux_amount/price_per_robux ou "123 Robux" no nome.
+    if product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
+        if snapshot.get("robux_amount") not in {None, "", 0, "0"}:
+            product_type = "robux"
+        elif snapshot.get("price_per_robux") not in {None, "", 0, "0"}:
+            product_type = "robux"
+        elif _robux_from_name(item_name) > 0:
+            product_type = "robux"
+
     if product_type not in ROBUX_TRACKED_PRODUCT_TYPES:
         return 0
 
     raw_amount = snapshot.get("robux_amount")
-    if raw_amount in {None, ""}:
-        raw_amount = dict(current_product_metadata or {}).get("robux_amount")
-
+    if raw_amount in {None, "", 0, "0"}:
+        raw_amount = current_metadata.get("robux_amount")
     amount = _positive_int(raw_amount)
 
-    # Produtos diretos do tipo "robux" mais antigos podem não ter robux_amount
-    # congelado no metadata. Nesses casos, o preço unitário normal da NEXTBUY
-    # permite reconstruir a quantidade: R$ 2,90 = 100 Robux.
+    if amount <= 0 and product_type == "robux":
+        # Cotação histórica é a reconstrução mais fiel para pedidos diretos.
+        raw_rate = snapshot.get("price_per_robux")
+        if raw_rate not in {None, "", 0, "0"} and unit_price not in {None, ""}:
+            try:
+                rate = Decimal(str(raw_rate))
+                price = Decimal(str(unit_price))
+                inferred = price / rate
+            except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
+                inferred = Decimal("0")
+            if inferred > 0 and inferred == inferred.to_integral_value():
+                amount = int(inferred)
+
+    if amount <= 0 and product_type == "robux":
+        amount = _robux_from_name(item_name)
+
     if amount <= 0 and product_type == "robux":
         raw_price = unit_price if unit_price not in {None, ""} else current_product_price
         try:
@@ -110,78 +160,315 @@ def _robux_from_order_item(
     return amount * safe_quantity
 
 
-async def get_customer_profile(
-    session: AsyncSession, *, guild_id: int, discord_user_id: int
-) -> CustomerProfile:
-    user = await session.scalar(select(User).where(User.discord_user_id == discord_user_id))
-    if user is None:
-        return CustomerProfile(ZERO, 0, None)
+async def _adjusted_spend_rows(session: AsyncSession, guild_id: int):
+    spend = _spend_subquery(guild_id)
+    rows = (
+        await session.execute(
+            select(
+                User.id.label("user_id"),
+                User.discord_user_id,
+                func.coalesce(spend.c.total_spent, 0).label("base_spent"),
+                func.coalesce(spend.c.completed_orders, 0).label("base_orders"),
+                func.coalesce(UserEconomyAdjustment.spent_adjustment, 0).label(
+                    "spent_adjustment"
+                ),
+                func.coalesce(UserEconomyAdjustment.robux_adjustment, 0).label(
+                    "robux_adjustment"
+                ),
+                func.coalesce(UserEconomyAdjustment.orders_adjustment, 0).label(
+                    "orders_adjustment"
+                ),
+            )
+            .outerjoin(spend, spend.c.user_id == User.id)
+            .outerjoin(
+                UserEconomyAdjustment,
+                and_(
+                    UserEconomyAdjustment.user_id == User.id,
+                    UserEconomyAdjustment.guild_id == guild_id,
+                ),
+            )
+            .where(
+                or_(
+                    spend.c.user_id.is_not(None),
+                    UserEconomyAdjustment.id.is_not(None),
+                )
+            )
+        )
+    ).mappings().all()
+    return rows
 
+
+async def _load_item_rows(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    user_ids: list[int],
+    newest_first: bool = False,
+):
+    if not user_ids:
+        return []
+    statement = (
+        select(
+            Order.user_id.label("user_id"),
+            OrderItem.name_snapshot.label("item_name"),
+            OrderItem.metadata_json.label("metadata"),
+            OrderItem.quantity,
+            OrderItem.unit_price,
+            Product.product_type.label("current_product_type"),
+            Product.metadata_json.label("current_product_metadata"),
+            Product.price_credits.label("current_product_price"),
+        )
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .outerjoin(Product, Product.id == OrderItem.product_id)
+        .where(
+            Order.guild_id == guild_id,
+            Order.user_id.in_(user_ids),
+            Order.status.in_(ACTIVE_SPEND_STATUSES),
+        )
+    )
+    if newest_first:
+        statement = statement.order_by(Order.created_at.desc(), OrderItem.id.desc())
+    return list((await session.execute(statement)).mappings().all())
+
+
+async def _slug_product_map(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    item_rows,
+) -> dict[str, Product]:
+    slugs = {
+        str(dict(row["metadata"] or {}).get("product_slug") or "").strip()
+        for row in item_rows
+        if row["current_product_type"] is None
+    }
+    slugs.discard("")
+    if not slugs:
+        return {}
+    products = list(
+        (
+            await session.scalars(
+                select(Product).where(
+                    Product.guild_id == guild_id,
+                    Product.slug.in_(slugs),
+                )
+            )
+        ).all()
+    )
+    return {product.slug: product for product in products}
+
+
+async def _robux_totals_for_users(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    user_ids: list[int],
+    newest_first: bool = False,
+) -> tuple[dict[int, int], list]:
+    rows = await _load_item_rows(
+        session,
+        guild_id=guild_id,
+        user_ids=user_ids,
+        newest_first=newest_first,
+    )
+    slug_products = await _slug_product_map(
+        session,
+        guild_id=guild_id,
+        item_rows=rows,
+    )
+    totals = {user_id: 0 for user_id in user_ids}
+
+    for row in rows:
+        metadata = dict(row["metadata"] or {})
+        current_type = row["current_product_type"]
+        current_metadata = row["current_product_metadata"]
+        current_price = row["current_product_price"]
+
+        if current_type is None:
+            slug = str(metadata.get("product_slug") or "").strip()
+            fallback_product = slug_products.get(slug)
+            if fallback_product is not None:
+                current_type = fallback_product.product_type
+                current_metadata = fallback_product.metadata_json
+                current_price = fallback_product.price_credits
+
+        user_id = int(row["user_id"])
+        totals[user_id] = totals.get(user_id, 0) + _robux_from_order_item(
+            metadata,
+            quantity=row["quantity"],
+            item_name=row["item_name"],
+            current_product_type=current_type,
+            current_product_metadata=current_metadata,
+            unit_price=row["unit_price"],
+            current_product_price=current_price,
+        )
+    return totals, rows
+
+
+async def get_economy_base(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    user_id: int,
+) -> EconomyBase:
     spend = _spend_subquery(guild_id)
     row = (
         await session.execute(
-            select(spend.c.total_spent, spend.c.completed_orders).where(spend.c.user_id == user.id)
+            select(spend.c.total_spent, spend.c.completed_orders).where(
+                spend.c.user_id == user_id
+            )
         )
     ).one_or_none()
-    total_spent = money(row.total_spent if row else ZERO)
-    completed_orders = int(row.completed_orders if row else 0)
+    base_spent = money(row.total_spent if row else ZERO)
+    base_orders = int(row.completed_orders if row else 0)
+    robux_by_user, _ = await _robux_totals_for_users(
+        session,
+        guild_id=guild_id,
+        user_ids=[user_id],
+    )
+    return EconomyBase(
+        total_spent=base_spent,
+        completed_orders=base_orders,
+        robux_purchased=robux_by_user.get(user_id, 0),
+    )
 
-    if total_spent > ZERO:
-        position = await session.scalar(
-            select(func.count()).select_from(spend).where(spend.c.total_spent > total_spent)
+
+async def set_user_economy_target(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    discord_user_id: int,
+    total_spent: Decimal,
+    robux_purchased: int,
+    completed_orders: int,
+) -> CustomerProfile:
+    target_spent = money(total_spent)
+    if target_spent < ZERO:
+        raise ValueError("O total gasto não pode ser negativo.")
+    if robux_purchased < 0 or completed_orders < 0:
+        raise ValueError("Robux e quantidade de compras não podem ser negativos.")
+
+    user = await get_or_create_user(session, discord_user_id)
+    base = await get_economy_base(session, guild_id=guild_id, user_id=user.id)
+
+    adjustment = await session.scalar(
+        select(UserEconomyAdjustment).where(
+            UserEconomyAdjustment.guild_id == guild_id,
+            UserEconomyAdjustment.user_id == user.id,
         )
-        leaderboard_position: int | None = int(position or 0) + 1
+    )
+    if adjustment is None:
+        adjustment = UserEconomyAdjustment(guild_id=guild_id, user_id=user.id)
+        session.add(adjustment)
+
+    adjustment.spent_adjustment = money(target_spent - base.total_spent)
+    adjustment.robux_adjustment = int(robux_purchased - base.robux_purchased)
+    adjustment.orders_adjustment = int(completed_orders - base.completed_orders)
+    await session.flush()
+    return await get_customer_profile(
+        session,
+        guild_id=guild_id,
+        discord_user_id=discord_user_id,
+    )
+
+
+async def clear_user_economy_adjustment(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    discord_user_id: int,
+) -> CustomerProfile:
+    user = await session.scalar(
+        select(User).where(User.discord_user_id == discord_user_id)
+    )
+    if user is None:
+        return CustomerProfile(ZERO, 0, None)
+
+    adjustment = await session.scalar(
+        select(UserEconomyAdjustment).where(
+            UserEconomyAdjustment.guild_id == guild_id,
+            UserEconomyAdjustment.user_id == user.id,
+        )
+    )
+    if adjustment is not None:
+        await session.delete(adjustment)
+        await session.flush()
+
+    return await get_customer_profile(
+        session,
+        guild_id=guild_id,
+        discord_user_id=discord_user_id,
+    )
+
+
+async def get_customer_profile(
+    session: AsyncSession, *, guild_id: int, discord_user_id: int
+) -> CustomerProfile:
+    user = await session.scalar(
+        select(User).where(User.discord_user_id == discord_user_id)
+    )
+    if user is None:
+        return CustomerProfile(ZERO, 0, None)
+
+    economy_rows = await _adjusted_spend_rows(session, guild_id)
+    user_economy = next(
+        (row for row in economy_rows if int(row["user_id"]) == user.id),
+        None,
+    )
+
+    if user_economy is None:
+        total_spent = ZERO
+        completed_orders = 0
+        robux_adjustment = 0
     else:
-        leaderboard_position = None
-
-    item_rows = (
-        await session.execute(
-            select(
-                OrderItem.name_snapshot,
-                OrderItem.metadata_json,
-                OrderItem.quantity,
-                OrderItem.unit_price,
-                Product.product_type,
-                Product.metadata_json.label("current_product_metadata"),
-                Product.price_credits.label("current_product_price"),
-            )
-            .join(Order, Order.id == OrderItem.order_id)
-            .outerjoin(Product, Product.id == OrderItem.product_id)
-            .where(
-                Order.guild_id == guild_id,
-                Order.user_id == user.id,
-                Order.status.in_(ACTIVE_SPEND_STATUSES),
-            )
-            .order_by(Order.created_at.desc(), OrderItem.id.desc())
-            .limit(200)
+        total_spent = max(
+            ZERO,
+            money(
+                Decimal(str(user_economy["base_spent"]))
+                + Decimal(str(user_economy["spent_adjustment"]))
+            ),
         )
-    ).all()
+        completed_orders = max(
+            0,
+            int(user_economy["base_orders"])
+            + int(user_economy["orders_adjustment"]),
+        )
+        robux_adjustment = int(user_economy["robux_adjustment"])
+
+    robux_by_user, item_rows = await _robux_totals_for_users(
+        session,
+        guild_id=guild_id,
+        user_ids=[user.id],
+        newest_first=True,
+    )
+    robux_purchased = max(0, robux_by_user.get(user.id, 0) + robux_adjustment)
+
+    leaderboard_position: int | None = None
+    if total_spent > ZERO or robux_purchased > 0:
+        higher = 0
+        for row in economy_rows:
+            candidate_spent = max(
+                ZERO,
+                money(
+                    Decimal(str(row["base_spent"]))
+                    + Decimal(str(row["spent_adjustment"]))
+                ),
+            )
+            if candidate_spent > total_spent:
+                higher += 1
+        leaderboard_position = higher + 1
 
     recent_products: list[str] = []
     games: list[str] = []
-    robux_purchased = 0
-    for (
-        item_name,
-        metadata,
-        quantity,
-        unit_price,
-        product_type,
-        product_metadata,
-        product_price,
-    ) in item_rows:
-        robux_purchased += _robux_from_order_item(
-            metadata,
-            quantity=quantity,
-            current_product_type=product_type,
-            current_product_metadata=product_metadata,
-            unit_price=unit_price,
-            current_product_price=product_price,
-        )
-        if item_name not in recent_products:
+    for row in item_rows:
+        item_name = str(row["item_name"] or "").strip()
+        if item_name and item_name not in recent_products:
             recent_products.append(item_name)
-        game_name = (metadata or {}).get("game_name")
+        game_name = str(dict(row["metadata"] or {}).get("game_name") or "").strip()
         if game_name and game_name not in games:
-            games.append(str(game_name))
+            games.append(game_name)
+        if len(recent_products) >= 5 and len(games) >= 5:
+            break
 
     return CustomerProfile(
         total_spent=total_spent,
@@ -196,67 +483,56 @@ async def get_customer_profile(
 async def list_leaderboard(
     session: AsyncSession, *, guild_id: int, limit: int = 20
 ) -> list[LeaderboardEntry]:
-    spend = _spend_subquery(guild_id)
-    rows = (
-        await session.execute(
-            select(User.id, User.discord_user_id, spend.c.total_spent, spend.c.completed_orders)
-            .join(spend, spend.c.user_id == User.id)
-            .where(spend.c.total_spent > 0)
-            .order_by(spend.c.total_spent.desc(), spend.c.completed_orders.desc(), User.id.asc())
-            .limit(max(1, min(limit, 100)))
-        )
-    ).all()
-    if not rows:
+    economy_rows = await _adjusted_spend_rows(session, guild_id)
+    if not economy_rows:
         return []
 
-    user_ids = [int(row.id) for row in rows]
-    item_rows = (
-        await session.execute(
-            select(
-                Order.user_id,
-                OrderItem.metadata_json,
-                OrderItem.quantity,
-                OrderItem.unit_price,
-                Product.product_type,
-                Product.metadata_json.label("current_product_metadata"),
-                Product.price_credits.label("current_product_price"),
-            )
-            .join(OrderItem, OrderItem.order_id == Order.id)
-            .outerjoin(Product, Product.id == OrderItem.product_id)
-            .where(
-                Order.guild_id == guild_id,
-                Order.user_id.in_(user_ids),
-                Order.status.in_(ACTIVE_SPEND_STATUSES),
-            )
+    user_ids = [int(row["user_id"]) for row in economy_rows]
+    robux_by_user, _ = await _robux_totals_for_users(
+        session,
+        guild_id=guild_id,
+        user_ids=user_ids,
+    )
+
+    entries: list[tuple[int, LeaderboardEntry]] = []
+    for row in economy_rows:
+        user_id = int(row["user_id"])
+        total_spent = max(
+            ZERO,
+            money(
+                Decimal(str(row["base_spent"]))
+                + Decimal(str(row["spent_adjustment"]))
+            ),
         )
-    ).all()
-    robux_by_user: dict[int, int] = {user_id: 0 for user_id in user_ids}
-    for (
-        user_id,
-        metadata,
-        quantity,
-        unit_price,
-        product_type,
-        product_metadata,
-        product_price,
-    ) in item_rows:
-        robux_by_user[int(user_id)] = robux_by_user.get(
-            int(user_id), 0
-        ) + _robux_from_order_item(
-            metadata,
-            quantity=quantity,
-            current_product_type=product_type,
-            current_product_metadata=product_metadata,
-            unit_price=unit_price,
-            current_product_price=product_price,
+        completed_orders = max(
+            0,
+            int(row["base_orders"]) + int(row["orders_adjustment"]),
+        )
+        robux_purchased = max(
+            0,
+            robux_by_user.get(user_id, 0) + int(row["robux_adjustment"]),
+        )
+        if total_spent <= ZERO and robux_purchased <= 0 and completed_orders <= 0:
+            continue
+        entries.append(
+            (
+                user_id,
+                LeaderboardEntry(
+                    discord_user_id=int(row["discord_user_id"]),
+                    total_spent=total_spent,
+                    completed_orders=completed_orders,
+                    robux_purchased=robux_purchased,
+                ),
+            )
         )
 
-    return [
-        LeaderboardEntry(
-            discord_user_id=int(row.discord_user_id),
-            total_spent=money(row.total_spent),
-            completed_orders=int(row.completed_orders),
-            robux_purchased=robux_by_user.get(int(row.id), 0),
+    entries.sort(
+        key=lambda item: (
+            -item[1].total_spent,
+            -item[1].completed_orders,
+            -item[1].robux_purchased,
+            item[0],
         )
-        for row in rows
-    ]
+    )
+    safe_limit = max(1, min(limit, 100))
+    return [entry for _, entry in entries[:safe_limit]]
