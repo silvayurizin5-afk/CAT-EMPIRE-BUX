@@ -168,6 +168,13 @@ class TermsModal(discord.ui.Modal, title="Criar/atualizar termo"):
         label="Conteúdo", style=discord.TextStyle.paragraph, max_length=4000
     )
     emoji = discord.ui.TextInput(label="Emoji", required=False, max_length=128)
+    ephemeral_message = discord.ui.TextInput(
+        label="Submensagem ephemeral ao selecionar",
+        required=False,
+        style=discord.TextStyle.paragraph,
+        max_length=1800,
+        placeholder="Mensagem privada mostrada quando o cliente selecionar este termo.",
+    )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -180,6 +187,7 @@ class TermsModal(discord.ui.Modal, title="Criar/atualizar termo"):
                 title=str(self.title_text),
                 content=str(self.content),
                 emoji=str(self.emoji),
+                ephemeral_message=str(self.ephemeral_message),
             )
         await interaction.response.send_message(
             f"Termo **{terms.title}** salvo na versão {terms.version}.", ephemeral=True
