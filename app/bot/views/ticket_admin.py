@@ -115,7 +115,6 @@ class TicketAdminSelect(discord.ui.Select):
         self.owner_id = owner_id
         options = []
         for order, user, item_name in rows[:25]:
-            channel_id = int(order.ticket_channel_id or 0)
             options.append(
                 discord.SelectOption(
                     label=(item_name or "Pedido")[:100],
