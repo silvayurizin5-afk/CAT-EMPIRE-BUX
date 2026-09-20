@@ -8,7 +8,9 @@ from sqlalchemy import select
 
 from app.bot.checks import can_deliver, can_support
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
-from app.bot.workflows.transcripts import render_channel_transcript
+from app.bot.workflows.ticket_archive import archive_ticket
+from app.services.support_tickets import get_support_options
+from app.core.guild_guard import is_store_guild
 from app.db.models import GuildConfig, Order, OrderItem, Product, User
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
@@ -114,21 +116,11 @@ async def _save_ticket_transcript(
     order_id: UUID,
     config: GuildConfig | None,
 ) -> bool:
-    if not config or not config.transcript_channel_id:
-        return False
-    target = channel.guild.get_channel(config.transcript_channel_id)
-    if not isinstance(target, discord.TextChannel):
-        return False
-    transcript = await render_channel_transcript(channel)
-    file = discord.File(
-        io.BytesIO(transcript),
-        filename="transcript-ticket.html",
-    )
-    await target.send(
-        content=f"Transcript do ticket **{channel.name}**",
-        file=file,
-    )
-    return True
+    async with SessionLocal() as session:
+        options = await get_support_options(session, channel.guild.id)
+    url = await archive_ticket(channel, config.transcript_channel_id if config else None,
+                               required=options.transcript_required)
+    return bool(url)
 
 
 async def delete_order_ticket(
@@ -143,6 +135,8 @@ async def delete_order_ticket(
         return False, "Pedido não encontrado."
 
     order, user, items, config = loaded
+    if order.guild_id != guild.id or not is_store_guild(guild.id):
+        return False, "Este ticket não pertence ao servidor autorizado."
     channel_id = int(order.ticket_channel_id or 0)
     if expected_channel_id and channel_id and expected_channel_id != channel_id:
         return False, "Esse ticket não corresponde mais ao canal selecionado."
@@ -171,8 +165,8 @@ async def delete_order_ticket(
                 order_id=order_id,
                 config=config,
             )
-        except discord.HTTPException:
-            transcript_saved = False
+        except (discord.HTTPException, ValueError):
+            return False, "Não foi possível salvar o transcript. O canal foi preservado; verifique a configuração e as permissões."
 
         try:
             await channel.delete(
@@ -326,6 +320,8 @@ async def open_order_ticket(
         return None
     order, user, items, config = loaded
     guild = interaction.guild
+    if order.guild_id != guild.id or not is_store_guild(guild.id):
+        return None
 
     if order.ticket_channel_id:
         existing = guild.get_channel(order.ticket_channel_id)
@@ -632,7 +628,10 @@ class TicketStaffView(discord.ui.View):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         loaded = await _load_order(self.order_id)
-        config = loaded[3] if loaded else None
+        if not loaded or loaded[0].guild_id != interaction.guild.id or loaded[0].ticket_channel_id != interaction.channel.id:
+            await interaction.followup.send("Ticket não encontrado neste canal.", ephemeral=True)
+            return
+        config = loaded[3]
         transcript_saved = False
         try:
             transcript_saved = await _save_ticket_transcript(
@@ -640,11 +639,20 @@ class TicketStaffView(discord.ui.View):
                 order_id=self.order_id,
                 config=config,
             )
-        except discord.HTTPException:
-            transcript_saved = False
+        except (discord.HTTPException, ValueError):
+            await interaction.followup.send(
+                "Não foi possível salvar o transcript. O ticket continua aberto; verifique a configuração e as permissões.",
+                ephemeral=True,
+            )
+            return
         if loaded:
             _, user, _, _ = loaded
             member = interaction.guild.get_member(user.discord_user_id)
+            if member is None:
+                try:
+                    member = await interaction.guild.fetch_member(user.discord_user_id)
+                except discord.NotFound:
+                    member = None
             if member:
                 await interaction.channel.set_permissions(member, send_messages=False, view_channel=True)
         was_closed = interaction.channel.name.startswith("closed-")
@@ -666,7 +674,10 @@ class TicketStaffView(discord.ui.View):
                         "transcript_saved": transcript_saved,
                     },
                 )
-        await interaction.followup.send("Ticket fechado e transcript processado.", ephemeral=True)
+        await interaction.followup.send(
+            "Ticket fechado. " + ("Transcript salvo." if transcript_saved else "Transcript desativado na configuração."),
+            ephemeral=True,
+        )
 
     @discord.ui.button(
         label="Excluir ticket",

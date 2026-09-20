@@ -1,13 +1,14 @@
 import html
 import re
 from datetime import timedelta, timezone
+from urllib.parse import urlsplit
 
 import discord
 
 _BRT = timezone(timedelta(hours=-3), name="BRT")
 _CUSTOM_EMOJI_RE = re.compile(r"&lt;(a?):([A-Za-z0-9_]+):(\d+)&gt;")
 _TICKET_TOPIC_RE = re.compile(
-    r"^NEXTBUY order=([0-9a-fA-F-]{36}) customer=(\d{1,20})$"
+    r"^NEXTBUY (?:order|support)=([0-9a-fA-F-]{36}) customer=(\d{1,20})$"
 )
 
 
@@ -65,6 +66,44 @@ def _component_text(components) -> list[str]:
     return parts
 
 
+def _safe_url(value) -> str | None:
+    value = str(value or "")
+    try:
+        url = urlsplit(value)
+    except ValueError:
+        return None
+    if url.scheme != "https" or not url.hostname or url.username or url.password:
+        return None
+    return html.escape(value, quote=True)
+
+
+def _media_image(value, label="Imagem") -> str:
+    url = _safe_url(value)
+    return (f'<a class="attachment image-attachment" href="{url}" rel="noopener noreferrer">'
+            f'<img loading="lazy" src="{url}" alt="{html.escape(label, quote=True)}"></a>') if url else ""
+
+
+def _component_media(components) -> str:
+    blocks = []
+    def walk(component):
+        media = getattr(component, "media", None)
+        if media:
+            blocks.append(_media_image(getattr(media, "url", "")))
+        for item in getattr(component, "items", None) or []:
+            media = getattr(item, "media", None)
+            if media:
+                blocks.append(_media_image(getattr(media, "url", "")))
+        accessory = getattr(component, "accessory", None)
+        if accessory:
+            walk(accessory)
+        for child in (getattr(component, "children", None)
+                      or getattr(component, "components", None) or []):
+            walk(child)
+    for component in components or []:
+        walk(component)
+    return "".join(blocks)
+
+
 def _render_embed(embed: discord.Embed) -> str:
     parts: list[str] = []
     if embed.title:
@@ -80,6 +119,9 @@ def _render_embed(embed: discord.Embed) -> str:
         )
     if embed.footer and embed.footer.text:
         parts.append(f'<div class="embed-footer">{_format_text(embed.footer.text)}</div>')
+    for media in (embed.image, embed.thumbnail):
+        if media and media.url:
+            parts.append(_media_image(media.url))
     if not parts:
         return ""
     return f'<div class="embed">{"".join(parts)}</div>'
@@ -88,7 +130,9 @@ def _render_embed(embed: discord.Embed) -> str:
 def _render_attachments(message: discord.Message) -> str:
     blocks: list[str] = []
     for attachment in message.attachments:
-        url = html.escape(attachment.url, quote=True)
+        url = _safe_url(attachment.url)
+        if not url:
+            continue
         filename = html.escape(attachment.filename)
         content_type = (attachment.content_type or "").lower()
         if content_type.startswith("image/"):
@@ -116,17 +160,24 @@ def _message_body(message: discord.Message) -> str:
         rendered = "<br>".join(_format_text(part) for part in component_parts)
         blocks.append(f'<div class="component-content">{rendered}</div>')
 
-    blocks.extend(_render_embed(embed) for embed in message.embeds if _render_embed(embed))
+    blocks.append(_component_media(message.components))
+    blocks.extend(rendered for embed in message.embeds if (rendered := _render_embed(embed)))
+    if getattr(message, "edited_at", None):
+        blocks.append(f'<div class="muted">Editada em {message.edited_at.astimezone(_BRT):%d/%m/%Y %H:%M:%S BRT}</div>')
+    reference = getattr(message, "reference", None)
+    if reference and reference.message_id:
+        blocks.insert(0, f'<div class="muted">Em resposta à mensagem {int(reference.message_id)}</div>')
     attachments = _render_attachments(message)
     if attachments:
         blocks.append(f'<div class="attachments">{attachments}</div>')
 
+    blocks = [block for block in blocks if block]
     if not blocks:
         blocks.append('<div class="content muted">Mensagem sem conteúdo textual.</div>')
     return "".join(blocks)
 
 
-async def render_channel_transcript(channel: discord.TextChannel) -> bytes:
+async def render_channel_transcript(channel: discord.TextChannel, *, summary: dict | None = None) -> bytes:
     messages = [message async for message in channel.history(limit=None, oldest_first=True)]
     rows: list[str] = []
 
@@ -163,12 +214,15 @@ async def render_channel_transcript(channel: discord.TextChannel) -> bytes:
     if customer_id:
         context_pills.append(f'<span class="pill">Cliente: {html.escape(customer_id)}</span>')
     context_pills.append(f'<span class="pill">Gerado em: {generated_at}</span>')
+    for label, value in (summary or {}).items():
+        context_pills.append(f'<span class="pill">{html.escape(str(label))}: {html.escape(str(value))}</span>')
     summary_html = "".join(context_pills)
 
     document = f"""<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
 <style>
@@ -219,7 +273,7 @@ code{{background:var(--code);border:1px solid #343a48;padding:1px 5px;border-rad
 <h1>#{channel_name}</h1>
 <div class="summary">{summary_html}</div>
 </div></header>
-<main>{''.join(rows) if rows else '<div class="empty">Nenhuma mensagem registrada neste ticket.</div>'}</main>
+<main><p class="muted">Retrato do histórico disponível na exportação. Arquivos e imagens usam links externos que podem expirar; mensagens já excluídas não são recuperadas.</p>{''.join(rows) if rows else '<div class="empty">Nenhuma mensagem registrada neste ticket.</div>'}</main>
 </body>
 </html>"""
     return document.encode("utf-8")

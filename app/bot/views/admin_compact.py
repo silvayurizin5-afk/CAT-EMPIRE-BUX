@@ -31,6 +31,8 @@ ADMIN_ACTIONS = (
     ),
     ("embed_builder", "Criar mensagem visual", "Editor visual para mensagens do servidor"),
     ("feedback", "Configurar feedbacks", "Emoji e permissões do canal de avaliações"),
+    ("support_tickets", "Configurar tickets", "Painel de suporte, regras, logs e transcripts"),
+    ("support_manage", "Gerenciar suporte", "Assumir, fechar, reabrir, exportar e excluir"),
     ("ticket_messages", "Mensagens dos tickets", "Editar textos automáticos dos pedidos"),
     ("manage_tickets", "Gerenciar tickets", "Consultar e excluir tickets fora do canal atual"),
     ("new_terms", "Criar ou atualizar termo", "Cadastrar uma nova versão de termo"),
@@ -137,6 +139,16 @@ class CompactAdminPanelView(discord.ui.LayoutView):
                     dm_cooldown_hours=dm_hours,
                 )
             )
+            return
+
+        if action == "support_tickets":
+            from app.bot.views.support_admin import send_support_admin
+            await send_support_admin(interaction)
+            return
+
+        if action == "support_manage":
+            from app.bot.views.support import send_support_list
+            await send_support_list(interaction)
             return
 
         if action == "ticket_messages":
