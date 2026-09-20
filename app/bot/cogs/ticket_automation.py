@@ -60,9 +60,15 @@ class TicketAutomationCog(commands.Cog):
             )
 
         item_lines = "\n".join(f"• {item.name_snapshot} × {item.quantity}" for item in items)
+        if not items:
+            order_label = "Compra"
+        elif len(items) == 1:
+            order_label = f"{items[0].name_snapshot} × {items[0].quantity}"
+        else:
+            order_label = f"{items[0].name_snapshot} + {len(items) - 1} item(ns)"
         context = TicketTemplateContext(
             customer=f"<@{user.discord_user_id}>",
-            order=str(order.id)[:8],
+            order=order_label,
             total=_credits(order.total_credits),
             items=item_lines or "—",
         )
