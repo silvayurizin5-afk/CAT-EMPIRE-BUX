@@ -344,7 +344,7 @@ async def open_manual_pix_ticket(
     )
 
     try:
-        filename = f"pix-{str(order.id)[:8]}.png"
+        filename = "pix-qrcode.png"
         file = discord.File(io.BytesIO(charge.qr_png), filename=filename)
         item_lines = [f"- **{item.name_snapshot}** × `{item.quantity}`" for item in items]
         view = ManualPixPaymentLayout(
