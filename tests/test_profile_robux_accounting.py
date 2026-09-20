@@ -88,3 +88,39 @@ def test_explicit_direct_robux_amount_has_priority_over_price_inference() -> Non
         )
         == 500
     )
+
+
+def test_legacy_robux_order_can_recover_amount_from_historical_rate() -> None:
+    assert (
+        _robux_from_order_item(
+            {"price_per_robux": "0.029"},
+            item_name="Robux normal",
+            quantity=1,
+            unit_price=Decimal("29.00"),
+        )
+        == 1000
+    )
+
+
+def test_legacy_robux_order_can_recover_amount_from_item_name() -> None:
+    assert (
+        _robux_from_order_item(
+            {},
+            item_name="Entrega normal • 2.500 Robux",
+            quantity=1,
+            unit_price=Decimal("72.50"),
+        )
+        == 2500
+    )
+
+
+def test_item_named_robux_is_treated_as_legacy_direct_robux_purchase() -> None:
+    assert (
+        _robux_from_order_item(
+            {},
+            item_name="100 Robux",
+            quantity=3,
+            unit_price=Decimal("2.90"),
+        )
+        == 300
+    )
