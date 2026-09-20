@@ -36,6 +36,9 @@ class TicketMessagesModal(discord.ui.Modal, title="Mensagens dos tickets"):
         self.instruction_template.default = instruction_template
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await can_admin(interaction):
+            await interaction.response.send_message("Sem permissão.", ephemeral=True)
+            return
         if interaction.guild is None:
             return
         try:
@@ -247,6 +250,9 @@ class TicketAdminDetailLayout(discord.ui.LayoutView):
 
 
 async def send_ticket_management(interaction: discord.Interaction) -> None:
+    if not await can_admin(interaction):
+        await interaction.response.send_message("Sem permissão.", ephemeral=True)
+        return
     if interaction.guild is None:
         return
     await interaction.response.defer(ephemeral=True, thinking=True)

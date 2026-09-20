@@ -52,7 +52,7 @@ def test_audit_embed_is_human_readable_with_order_context() -> None:
     assert "Pedido" not in fields
     assert fields["Transcript salvo"] == "Sim"
     assert fields["Desconto"] == "10%"
-    assert embed.footer.text == "NEXTBUY • Auditoria"
+    assert embed.footer.text == "NEXTBUY • Registro de atividades"
     assert "Código:" not in embed.footer.text
     assert "#42" not in embed.footer.text
 

@@ -18,6 +18,15 @@ from app.services.audit import (
 logger = logging.getLogger(__name__)
 
 _ACTIONS: dict[str, tuple[str, str]] = {
+    "ticket.claim": ("Atendimento assumido", "Um atendente assumiu este ticket."),
+    "ticket.release": ("Atendimento liberado", "Ticket disponível para outro atendente."),
+    "ticket.reopen": ("Ticket reaberto", "O cliente pode voltar a escrever no atendimento."),
+    "ticket.transcript": ("Transcript exportado", "O histórico foi enviado ao canal de transcripts."),
+    "ticket.add": ("Participante adicionado", "Um membro recebeu acesso ao ticket."),
+    "ticket.remove": ("Participante removido", "O acesso adicional foi removido."),
+    "ticket.settings": ("Configuração de tickets atualizada", "As regras ou o visual foram alterados."),
+    "ticket.panel": ("Painel de tickets publicado", "A central de atendimento foi publicada."),
+    "ticket.external_delete": ("Ticket removido no Discord", "O canal foi excluído fora dos controles do bot."),
     "pix.payment_ticket.open": (
         "Ticket de pagamento PIX aberto",
         "Um canal privado de pagamento PIX foi criado.",
@@ -42,6 +51,11 @@ _ACTIONS: dict[str, tuple[str, str]] = {
 }
 
 _DETAIL_LABELS = {
+    "subject": "Assunto",
+    "assignee_id": "Atendente",
+    "participant_id": "Participante",
+    "transcript_url": "Arquivo do transcript",
+    "section": "Configuração alterada",
     "amount": "Valor",
     "amount_brl": "Valor",
     "customer_discord_id": "Cliente",
@@ -82,9 +96,11 @@ def _format_money(value) -> str:
 
 
 def _format_detail(key: str, value) -> str:
+    if value is None:
+        return "Não definido"
     if key in {"amount", "amount_brl"}:
         return _format_money(value)
-    if key == "customer_discord_id" and str(value).isdigit():
+    if key in {"customer_discord_id", "assignee_id", "participant_id"} and str(value).isdigit():
         return f"<@{value}>"
     if key == "channel_id" and str(value).isdigit():
         return f"<#{value}>"
@@ -255,7 +271,7 @@ def build_audit_embed(
     if extras:
         embed.add_field(name="Informações adicionais", value="\n".join(extras)[:1024], inline=False)
 
-    embed.set_footer(text="NEXTBUY • Auditoria")
+    embed.set_footer(text="NEXTBUY • Registro de atividades")
     return embed
 
 

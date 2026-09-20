@@ -69,6 +69,7 @@ class NextBuyBot(commands.Bot):
         await self.load_extension("app.bot.cogs.automation_refinement")
         await self.load_extension("app.bot.cogs.delivery_runtime")
         await self.load_extension("app.bot.cogs.ticket_automation")
+        await self.load_extension("app.bot.cogs.support_tickets")
         await self.load_extension("app.bot.cogs.audit_logs")
         await self.load_extension("app.bot.cogs.leaderboard_refresh")
         self.add_view(LeaderboardView())

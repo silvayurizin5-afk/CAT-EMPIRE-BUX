@@ -30,7 +30,8 @@ async def can_admin(interaction: discord.Interaction) -> bool:
 async def can_support(interaction: discord.Interaction) -> bool:
     if await can_admin(interaction):
         return True
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+    if (interaction.guild is None or not is_store_guild(interaction.guild.id)
+            or not isinstance(interaction.user, discord.Member)):
         return False
     async with SessionLocal() as session:
         config = await session.scalar(
@@ -42,7 +43,8 @@ async def can_support(interaction: discord.Interaction) -> bool:
 async def can_deliver(interaction: discord.Interaction) -> bool:
     if await can_admin(interaction):
         return True
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+    if (interaction.guild is None or not is_store_guild(interaction.guild.id)
+            or not isinstance(interaction.user, discord.Member)):
         return False
     async with SessionLocal() as session:
         config = await session.scalar(

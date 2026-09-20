@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 import discord
 from sqlalchemy.exc import IntegrityError
 
+from app.bot.checks import can_admin
 from app.bot.workflows.feedback_permissions import (
     FeedbackPermissionSyncError,
     sync_feedback_channel_permissions,
@@ -47,9 +48,15 @@ class RolePicker(discord.ui.RoleSelect):
         self.field_name = field_name
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if not await can_admin(interaction):
+            await interaction.response.send_message("Sem permissão.", ephemeral=True)
+            return
         if interaction.guild is None:
             return
         role = self.values[0]
+        if role.id == interaction.guild.id:
+            await interaction.response.send_message("Escolha um cargo específico; @everyone não é permitido.", ephemeral=True)
+            return
         async with SessionLocal() as session, session.begin():
             config = await get_or_create_guild_config(session, interaction.guild.id)
             setattr(config, self.field_name, role.id)
@@ -80,6 +87,9 @@ class ChannelPicker(discord.ui.ChannelSelect):
         self.field_name = field_name
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if not await can_admin(interaction):
+            await interaction.response.send_message("Sem permissão.", ephemeral=True)
+            return
         if interaction.guild is None:
             return
         channel = self.values[0]

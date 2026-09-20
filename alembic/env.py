@@ -16,7 +16,7 @@ from app.db.order_payment_models import OrderPayment  # noqa: F401
 from app.db.payment_models import TopUpNotification  # noqa: F401
 from app.db.risk_models import CommerceLock  # noqa: F401
 from app.db.store_models import StoreCoupon, StorePanelConfig  # noqa: F401
-from app.db.ticket_models import TicketSettings  # noqa: F401
+from app.db.ticket_models import SupportTicket, TicketSettings  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
