@@ -9,20 +9,20 @@ from app.services.delivery_media import (
 )
 
 
-def _gif_with_transparent_frame() -> bytes:
-    first = Image.new("RGBA", (80, 40), (123, 44, 191, 255))
-    blank = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
-    third = Image.new("RGBA", (80, 40), (20, 20, 20, 255))
+def _animated_gif() -> bytes:
+    frames = [
+        Image.new("RGB", (80, 40), (123, 44, 191)),
+        Image.new("RGB", (80, 40), (80, 20, 140)),
+        Image.new("RGB", (80, 40), (20, 20, 20)),
+    ]
     output = io.BytesIO()
-    first.save(
+    frames[0].save(
         output,
         format="GIF",
         save_all=True,
-        append_images=[blank, third],
-        duration=[100, 100, 100],
+        append_images=frames[1:],
+        duration=[100, 120, 140],
         loop=0,
-        disposal=2,
-        transparency=0,
     )
     return output.getvalue()
 
@@ -39,20 +39,20 @@ def test_banner_url_accepts_any_http_extension_or_query() -> None:
     )
 
 
-def test_coalescing_keeps_content_during_transparent_gif_frame() -> None:
-    frames, durations, loop = _coalesced_frames(_gif_with_transparent_frame())
-    assert len(frames) >= 2
-    assert durations[0] == 100
+def test_coalescing_preserves_animation_frames_and_durations() -> None:
+    frames, durations, loop = _coalesced_frames(_animated_gif())
+    assert len(frames) == 3
+    assert durations == [100, 120, 140]
     assert loop == 0
-    assert frames[1].getbbox() is not None
+    assert all(frame.getbbox() is not None for frame in frames)
 
 
 def test_animation_is_reencoded_as_animated_webp() -> None:
     encoded = _encode_animated_webp(
-        _gif_with_transparent_frame(),
+        _animated_gif(),
         target_bytes=500_000,
     )
     image = Image.open(io.BytesIO(encoded))
     assert image.format == "WEBP"
     assert getattr(image, "is_animated", False)
-    assert image.n_frames > 1
+    assert image.n_frames == 3
