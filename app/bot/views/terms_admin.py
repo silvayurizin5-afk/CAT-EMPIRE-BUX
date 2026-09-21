@@ -14,19 +14,15 @@ from app.services.terms import list_terms, set_terms_active
 
 def _terms_lines(terms: TermsDocument) -> list[str]:
     return [
-        terms.content[:3000],
+        terms.content[:1800],
         f"**Código:** `{terms.code}`",
         f"**Versão:** `{terms.version}`",
         f"**Status:** `{'Ativo' if terms.active else 'Desativado'}`",
-        f"**Descrição do seletor:** {terms.summary or '—'}",
-        f"**Emoji:** {terms.emoji or '—'}",
-        f"**Imagem:** {terms.image_url or '—'}",
-        f"**Link:** {terms.link_url or '—'}",
-        (
-            f"**Submensagem ephemeral:** {terms.ephemeral_message}"
-            if terms.ephemeral_message
-            else "**Submensagem ephemeral:** —"
-        ),
+        f"**Descrição do seletor:** {(terms.summary or '—')[:300]}",
+        f"**Emoji:** {(terms.emoji or '—')[:128]}",
+        f"**Imagem:** {(terms.image_url or '—')[:300]}",
+        f"**Link:** {(terms.link_url or '—')[:300]}",
+        f"**Submensagem ephemeral:** {(terms.ephemeral_message or '—')[:500]}",
     ]
 
 

@@ -90,9 +90,8 @@ class TermsGateView(discord.ui.LayoutView):
             emoji = emoji_display_value(selected.emoji, self._guild)
             prefix = f"{emoji} " if emoji else ""
             content = resolve_guild_emoji_aliases(selected.content, self._guild)
-            children.append(
-                discord.ui.TextDisplay(f"## {prefix}{selected.title}\n{content}")
-            )
+            children.append(discord.ui.TextDisplay(f"## {prefix}{selected.title}"))
+            children.append(discord.ui.TextDisplay(content or "\u200b"))
 
             image_url = safe_http_url(selected.image_url)
             if image_url:

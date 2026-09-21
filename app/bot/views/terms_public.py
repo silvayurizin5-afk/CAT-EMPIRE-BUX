@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import discord
 from sqlalchemy import select
 
-from app.bot.components_v2 import DEFAULT_ACCENT, add_action_row
+from app.bot.components_v2 import DEFAULT_ACCENT
 from app.bot.emoji import (
     emoji_display_value,
     resolve_guild_emoji_aliases,
@@ -52,7 +52,8 @@ class PublicTermDetailView(discord.ui.LayoutView):
         heading = f"{emoji} " if emoji else ""
         body = resolve_guild_emoji_aliases(terms.content, guild)
         children: list[discord.ui.Item] = [
-            discord.ui.TextDisplay(f"## {heading}{terms.title}\n{body}")
+            discord.ui.TextDisplay(f"## {heading}{terms.title}"),
+            discord.ui.TextDisplay(body or "\u200b"),
         ]
 
         image_url = safe_http_url(terms.image_url)
