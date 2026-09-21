@@ -28,7 +28,7 @@ class TermsGateSelect(discord.ui.Select):
             discord.SelectOption(
                 label=item.title[:100],
                 value=str(item.id),
-                description=(item.summary or f"Versão {item.version}")[:100],
+                description=(item.summary or "Leia este termo")[:100],
                 emoji=select_option_emoji(item.emoji, guild),
             )
             for item in terms[:25]
@@ -75,7 +75,7 @@ class TermsGateView(discord.ui.LayoutView):
             pending = [
                 (
                     f"- {emoji_display_value(item.emoji, self._guild) + ' ' if item.emoji else ''}"
-                    f"**{item.title}** — versão {item.version}"
+                    f"**{item.title}**"
                 )
                 for item in self._terms
             ]
@@ -125,9 +125,7 @@ class TermsGateView(discord.ui.LayoutView):
                 )
 
             children.append(discord.ui.Separator())
-            children.append(
-                discord.ui.TextDisplay(f"-# NEXTBUY • Versão {selected.version}")
-            )
+            children.append(discord.ui.TextDisplay("-# NEXTBUY • Termos"))
 
         self.container = discord.ui.Container(*children, accent_colour=DEFAULT_ACCENT)
         self.add_item(self.container)

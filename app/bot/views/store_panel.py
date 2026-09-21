@@ -9,6 +9,12 @@ from sqlalchemy import select
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row, format_percent
 from app.bot.emoji import resolve_guild_emoji_aliases, select_option_emoji
 from app.bot.views.manual_pix import open_manual_pix_ticket
+from app.bot.views.store_games import (
+    GameSubPanelLayout,
+    is_game_product,
+    list_game_subpanel_products,
+    product_store_option_description,
+)
 from app.bot.views.terms_gate import require_current_terms
 from app.core.money import money
 from app.db.models import Product
@@ -435,21 +441,20 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
 
 
 class StoreProductSelect(discord.ui.Select):
-    def __init__(self, products: list[Product], placeholder: str) -> None:
+    def __init__(
+        self,
+        products: list[Product],
+        placeholder: str,
+        guild: discord.Guild | None = None,
+    ) -> None:
         options: list[discord.SelectOption] = []
         for product in products[:25]:
-            price = (
-                "Indisponível"
-                if product.price_credits is None
-                else format_brl(money(product.price_credits))
-            )
-            stock = "∞" if product.stock_quantity is None else str(product.stock_quantity)
             options.append(
                 discord.SelectOption(
                     label=product.name[:100],
                     value=str(product.id),
-                    description=f"{price} • estoque {stock}"[:100],
-                    emoji=select_option_emoji(product.emoji),
+                    description=product_store_option_description(product),
+                    emoji=select_option_emoji(product.emoji, guild),
                 )
             )
         if not options:
@@ -479,11 +484,34 @@ class StoreProductSelect(discord.ui.Select):
         async with SessionLocal() as session, session.begin():
             product = await session.get(Product, product_id)
             config = await get_or_create_store_panel(session, interaction.guild.id)
+            game_products = (
+                await list_game_subpanel_products(
+                    session,
+                    guild_id=interaction.guild.id,
+                    game_product=product,
+                )
+                if product is not None
+                and product.guild_id == interaction.guild.id
+                and product.active
+                and is_game_product(product)
+                else []
+            )
+        if product is None or product.guild_id != interaction.guild.id or not product.active:
+            await interaction.edit_original_response(content="Produto indisponível.", view=None)
+            return
+        if is_game_product(product):
+            await interaction.edit_original_response(
+                content=None,
+                view=GameSubPanelLayout(
+                    game_product=product,
+                    products=game_products,
+                    owner_id=interaction.user.id,
+                    guild=interaction.guild,
+                ),
+            )
+            return
         if (
-            product is None
-            or product.guild_id != interaction.guild.id
-            or not product.active
-            or product.price_credits is None
+            product.price_credits is None
             or (product.stock_quantity is not None and product.stock_quantity <= 0)
         ):
             await interaction.edit_original_response(content="Produto indisponível.", view=None)
@@ -532,7 +560,10 @@ class StorePanelLayout(discord.ui.LayoutView):
         self.container = card.container
         card.remove_item(card.container)
         self.add_item(self.container)
-        add_select_row(self.container, StoreProductSelect(products, config.product_placeholder))
+        add_select_row(
+            self.container,
+            StoreProductSelect(products, config.product_placeholder, guild),
+        )
 
 
 async def _prepare_store_banner_for_guild(

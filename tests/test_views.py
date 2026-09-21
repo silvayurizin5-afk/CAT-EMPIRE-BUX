@@ -50,6 +50,7 @@ async def test_product_admin_exposes_stock_management() -> None:
     assert "Editar visual/preço" in labels
     assert "Estoque" in labels
     assert "Ativar/Desativar" in labels
+    assert "Loja / Subpainel" in labels
     view.stop()
 
 
@@ -108,7 +109,7 @@ async def test_terms_gate_exposes_review_and_acceptance() -> None:
     )
     assert "Termos necessários" in text
     assert "Segurança" in text
-    assert "versão 2" in text
+    assert "versão 2" not in text
 
     gate.stop()
     resume_view.stop()

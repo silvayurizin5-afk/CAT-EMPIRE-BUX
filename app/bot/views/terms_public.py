@@ -42,7 +42,7 @@ def term_option_description(terms: TermsDocument) -> str:
         cleaned = line.strip().lstrip("#>•-* ").strip()
         if cleaned:
             return cleaned[:100]
-    return f"Versão {terms.version}"
+    return "Leia este termo"
 
 
 class PublicTermDetailView(discord.ui.LayoutView):
@@ -81,7 +81,7 @@ class PublicTermDetailView(discord.ui.LayoutView):
             )
 
         children.append(discord.ui.Separator())
-        children.append(discord.ui.TextDisplay(f"-# NEXTBUY • Versão {terms.version}"))
+        children.append(discord.ui.TextDisplay("-# NEXTBUY • Termos"))
         self.container = discord.ui.Container(*children, accent_colour=DEFAULT_ACCENT)
         self.add_item(self.container)
 

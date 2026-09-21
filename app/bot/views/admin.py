@@ -123,16 +123,24 @@ class ProductModal(discord.ui.Modal, title="Criar produto"):
     name = discord.ui.TextInput(label="Nome", max_length=120)
     slug = discord.ui.TextInput(label="Identificador", placeholder="ex: blox-fruits-gp", max_length=140)
     product_type = discord.ui.TextInput(
-        label="Tipo", placeholder="item, robux ou gamepass", max_length=24
+        label="Tipo",
+        placeholder="jogo, item, conta, robux ou gamepass",
+        max_length=24,
     )
-    price = discord.ui.TextInput(label="Preço em créditos", placeholder="10,80", max_length=20)
+    price = discord.ui.TextInput(
+        label="Preço em créditos (vazio para Jogo)",
+        placeholder="10,80",
+        required=False,
+        max_length=20,
+    )
     game_name = discord.ui.TextInput(label="Jogo", required=False, max_length=120)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
+        raw_price = str(self.price).strip().replace(",", ".")
         try:
-            price = Decimal(str(self.price).replace(",", "."))
+            price = Decimal(raw_price) if raw_price else None
         except InvalidOperation:
             await interaction.response.send_message("Preço inválido.", ephemeral=True)
             return
@@ -152,8 +160,13 @@ class ProductModal(discord.ui.Modal, title="Criar produto"):
                 "Já existe um produto com esse identificador.", ephemeral=True
             )
             return
+        price_label = (
+            f"**{product.price_credits:.2f} créditos**"
+            if product.price_credits is not None
+            else "**sem preço direto**"
+        )
         await interaction.response.send_message(
-            f"Produto **{product.name}** criado por **{product.price_credits:.2f} créditos**.",
+            f"Produto **{product.name}** criado por {price_label}.",
             ephemeral=True,
         )
 

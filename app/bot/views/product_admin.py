@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.emoji import select_option_emoji
+from app.bot.views.store_game_admin import open_store_product_configuration
 from app.bot.workflows.leaderboard import refresh_leaderboard
 from app.db.models import Order, OrderItem, Product
 from app.db.session import SessionLocal
@@ -394,6 +395,17 @@ class ProductActionsView(discord.ui.View):
             )
             return
         await interaction.response.send_modal(ProductRobuxValueModal(product))
+
+    @discord.ui.button(label="Loja / Subpainel", style=discord.ButtonStyle.primary)
+    async def store_display(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        await open_store_product_configuration(
+            interaction,
+            product_id=self.product_id,
+        )
 
     @discord.ui.button(label="Ativar/Desativar", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
