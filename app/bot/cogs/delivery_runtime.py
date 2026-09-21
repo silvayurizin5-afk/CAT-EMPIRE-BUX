@@ -1,5 +1,10 @@
+import asyncio
+import io
+import logging
 import re
+
 import discord
+import httpx
 from sqlalchemy import select
 
 from app.bot.components_v2 import DEFAULT_ACCENT
@@ -8,6 +13,7 @@ from app.db.models import Order, Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
 from app.services.calculator import normalize_text
+from app.core.guild_guard import STORE_GUILD_ID
 from app.services.delivery_settings import (
     ARROW_EMOJI,
     BOX_EMOJI,
@@ -18,6 +24,14 @@ from app.services.delivery_settings import (
     product_line_values,
     sanitize_private_order_artifacts,
 )
+
+logger = logging.getLogger(__name__)
+
+_DELIVERY_BANNER_FILENAME = "nextbuy-entrega.gif"
+_DELIVERY_BANNER_ATTACHMENT_URL = f"attachment://{_DELIVERY_BANNER_FILENAME}"
+_MAX_BANNER_BYTES = 25 * 1024 * 1024
+_BANNER_CACHE: dict[str, bytes] = {}
+_BANNER_LOCK = asyncio.Lock()
 
 _CUSTOM_EMOJI_RE = re.compile(r"<(?P<animated>a?):[^:>]+:(?P<id>\d+)>")
 _DISCORD_EMOJI_URL_RE = re.compile(
@@ -52,7 +66,7 @@ _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
 def _configured_delivery_banner(
     raw_config: dict[str, object] | None,
 ) -> tuple[discord.File | None, str | None]:
-    """Retorna a URL configurada sem exigir extensão específica."""
+    """Retorna a URL configurada; o envio público usa _prepare_delivery_banner."""
 
     config = effective_delivery_config(raw_config)
     if not bool(config.get("banner_enabled", True)):
@@ -62,19 +76,90 @@ def _configured_delivery_banner(
     return None, source_url or None
 
 
+async def _download_delivery_banner(url: str) -> bytes:
+    cached = _BANNER_CACHE.get(url)
+    if cached is not None:
+        return cached
+
+    async with _BANNER_LOCK:
+        cached = _BANNER_CACHE.get(url)
+        if cached is not None:
+            return cached
+
+        timeout = httpx.Timeout(30.0, connect=10.0)
+        headers = {"User-Agent": "NEXTBUY/1.0 DiscordBot"}
+        data = bytearray()
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=timeout,
+            headers=headers,
+        ) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > _MAX_BANNER_BYTES:
+                        raise ValueError(
+                            "O banner de entrega ultrapassa 25 MB e não será enviado."
+                        )
+
+        if not data:
+            raise ValueError("O banner de entrega retornou um arquivo vazio.")
+
+        result = bytes(data)
+        _BANNER_CACHE.clear()
+        _BANNER_CACHE[url] = result
+        return result
+
+
 async def _prepare_delivery_banner(
     raw_config: dict[str, object] | None,
     *,
     upload_limit: int,
 ) -> tuple[discord.File | None, str | None, str | None]:
-    """Compatibilidade: usa a URL diretamente como os demais Components V2.
+    """Baixa o GIF uma única vez e o envia como attachment://.
 
-    Nenhuma mídia é baixada, decodificada, convertida ou reenviada pelo bot.
+    O download fica em memória; cada entrega apenas cria um novo discord.File
+    sobre os mesmos bytes. Isso evita depender da renderização da URL externa.
     """
 
-    _ = upload_limit
-    banner_file, banner_url = _configured_delivery_banner(raw_config)
-    return banner_file, banner_url, None
+    _, source_url = _configured_delivery_banner(raw_config)
+    if source_url is None:
+        return None, None, None
+
+    try:
+        data = await _download_delivery_banner(source_url)
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Falha ao preparar banner de entrega: %s", exc)
+        return None, None, str(exc)
+
+    safe_limit = max(1, int(upload_limit or 0))
+    if len(data) > safe_limit:
+        error = (
+            f"Banner de entrega tem {len(data) / (1024 * 1024):.1f} MB, "
+            f"acima do limite do servidor ({safe_limit / (1024 * 1024):.1f} MB)."
+        )
+        logger.warning(error)
+        return None, None, error
+
+    return (
+        discord.File(io.BytesIO(data), filename=_DELIVERY_BANNER_FILENAME),
+        _DELIVERY_BANNER_ATTACHMENT_URL,
+        None,
+    )
+
+
+async def _warm_delivery_banner_cache(bot) -> None:
+    try:
+        await bot.wait_until_ready()
+        guild = bot.get_guild(STORE_GUILD_ID)
+        upload_limit = guild.filesize_limit if guild is not None else 25 * 1024 * 1024
+        await _prepare_delivery_banner(None, upload_limit=upload_limit)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Falha ao pré-carregar o banner de entrega")
 
 
 def _delivery_image(items) -> str | None:
@@ -421,7 +506,16 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
         items=items,
     )
 
-    banner_file, banner_url = _configured_delivery_banner(raw_config)
+    banner_file, banner_url, banner_error = await _prepare_delivery_banner(
+        raw_config,
+        upload_limit=guild.filesize_limit,
+    )
+    if banner_error:
+        logger.warning(
+            "Entrega %s será enviada sem banner: %s",
+            order.id,
+            banner_error,
+        )
 
     send_kwargs: dict[str, object] = {
         "view": DeliveryPublicLayout(
@@ -452,6 +546,10 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
 
 async def setup(bot) -> None:
     tickets.publish_delivery = publish_delivery
+    asyncio.create_task(
+        _warm_delivery_banner_cache(bot),
+        name="nextbuy-warm-delivery-banner",
+    )
 
 
 __all__ = [
