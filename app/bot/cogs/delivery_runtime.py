@@ -1,6 +1,4 @@
 import re
-from pathlib import Path
-
 import discord
 from sqlalchemy import select
 
@@ -10,6 +8,7 @@ from app.db.models import Order, Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
 from app.services.calculator import normalize_text
+from app.services.delivery_media import DeliveryMediaError, prepare_delivery_media
 from app.services.delivery_settings import (
     ARROW_EMOJI,
     BOX_EMOJI,
@@ -51,21 +50,45 @@ _THUMBNAIL_PRODUCT_TEMPLATE = (
     "{discount_line}"
 )
 _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
-_DELIVERY_BANNER_PATH = Path(__file__).resolve().parents[2] / "assets" / "delivery_banner.gif"
-_DELIVERY_BANNER_FILENAME = "nextbuy-entrega.gif"
-_DELIVERY_BANNER_URL = f"attachment://{_DELIVERY_BANNER_FILENAME}"
-
-
 def _configured_delivery_banner(
     raw_config: dict[str, object] | None,
-) -> tuple[discord.File | None, str]:
-    # O GIF é empacotado com o bot e anexado à própria mensagem.
-    # attachment:// é estável e não depende de links assinados temporários do CDN.
-    _ = raw_config
-    return (
-        discord.File(_DELIVERY_BANNER_PATH, filename=_DELIVERY_BANNER_FILENAME),
-        _DELIVERY_BANNER_URL,
-    )
+) -> tuple[discord.File | None, str | None]:
+    """Retorna a URL configurada sem exigir extensão específica."""
+
+    config = effective_delivery_config(raw_config)
+    if not bool(config.get("banner_enabled", True)):
+        return None, None
+
+    source_url = str(config.get("banner_url") or "").strip()
+    return None, source_url or None
+
+
+async def _prepare_delivery_banner(
+    raw_config: dict[str, object] | None,
+    *,
+    upload_limit: int,
+) -> tuple[discord.File | None, str | None, str | None]:
+    """Baixa/normaliza a mídia. Se falhar, deixa o Discord tentar a URL original."""
+
+    config = effective_delivery_config(raw_config)
+    if not bool(config.get("banner_enabled", True)):
+        return None, None, None
+
+    source_url = str(config.get("banner_url") or "").strip()
+    if not source_url:
+        return None, None, None
+
+    normalize = bool(config.get("banner_normalize_animation", True))
+    try:
+        prepared = await prepare_delivery_media(
+            source_url,
+            upload_limit=upload_limit,
+            normalize_animation=normalize,
+        )
+    except DeliveryMediaError:
+        return None, source_url, None
+
+    return prepared.to_file(), prepared.attachment_url, prepared.filename
 
 
 def _delivery_image(items) -> str | None:
@@ -412,7 +435,10 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
         items=items,
     )
 
-    banner_file, banner_url = _configured_delivery_banner(raw_config)
+    banner_file, banner_url, _ = await _prepare_delivery_banner(
+        raw_config,
+        upload_limit=guild.filesize_limit,
+    )
 
     send_kwargs: dict[str, object] = {
         "view": DeliveryPublicLayout(
@@ -456,6 +482,7 @@ __all__ = [
     "_emoji_image_url",
     "_inline_emoji_from_asset",
     "_normalize_emoji",
+    "_prepare_delivery_banner",
     "_regular_image_url",
     "_render_delivery",
     "_render_delivery_sections",
