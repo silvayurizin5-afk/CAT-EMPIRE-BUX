@@ -8,7 +8,6 @@ from app.db.models import Order, Product
 from app.db.session import SessionLocal
 from app.db.store_models import StorePanelConfig
 from app.services.calculator import normalize_text
-from app.services.delivery_media import DeliveryMediaError, prepare_delivery_media
 from app.services.delivery_settings import (
     ARROW_EMOJI,
     BOX_EMOJI,
@@ -68,27 +67,14 @@ async def _prepare_delivery_banner(
     *,
     upload_limit: int,
 ) -> tuple[discord.File | None, str | None, str | None]:
-    """Baixa/normaliza a mídia. Se falhar, deixa o Discord tentar a URL original."""
+    """Compatibilidade: usa a URL diretamente como os demais Components V2.
 
-    config = effective_delivery_config(raw_config)
-    if not bool(config.get("banner_enabled", True)):
-        return None, None, None
+    Nenhuma mídia é baixada, decodificada, convertida ou reenviada pelo bot.
+    """
 
-    source_url = str(config.get("banner_url") or "").strip()
-    if not source_url:
-        return None, None, None
-
-    normalize = bool(config.get("banner_normalize_animation", True))
-    try:
-        prepared = await prepare_delivery_media(
-            source_url,
-            upload_limit=upload_limit,
-            normalize_animation=normalize,
-        )
-    except DeliveryMediaError:
-        return None, source_url, None
-
-    return prepared.to_file(), prepared.attachment_url, prepared.filename
+    _ = upload_limit
+    banner_file, banner_url = _configured_delivery_banner(raw_config)
+    return banner_file, banner_url, None
 
 
 def _delivery_image(items) -> str | None:
@@ -435,10 +421,7 @@ async def publish_delivery(guild: discord.Guild, *, order_id) -> None:
         items=items,
     )
 
-    banner_file, banner_url, _ = await _prepare_delivery_banner(
-        raw_config,
-        upload_limit=guild.filesize_limit,
-    )
+    banner_file, banner_url = _configured_delivery_banner(raw_config)
 
     send_kwargs: dict[str, object] = {
         "view": DeliveryPublicLayout(
