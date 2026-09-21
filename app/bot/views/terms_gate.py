@@ -18,7 +18,11 @@ def _terms_snapshot(terms: list[TermsDocument]) -> frozenset[tuple[int, int]]:
 
 
 class TermsGateSelect(discord.ui.Select):
-    def __init__(self, terms: list[TermsDocument], guild: discord.Guild) -> None:
+    def __init__(
+        self,
+        terms: list[TermsDocument],
+        guild: discord.Guild | None = None,
+    ) -> None:
         self._terms = {item.id: item for item in terms}
         options = [
             discord.SelectOption(
@@ -50,7 +54,7 @@ class TermsGateView(discord.ui.LayoutView):
         self,
         terms: list[TermsDocument],
         resume_view: discord.ui.View | discord.ui.LayoutView,
-        guild: discord.Guild,
+        guild: discord.Guild | None = None,
     ) -> None:
         if not terms:
             raise ValueError("TermsGateView exige pelo menos um termo")
