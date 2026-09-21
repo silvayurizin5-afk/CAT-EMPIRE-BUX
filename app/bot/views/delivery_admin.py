@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import discord
 
-from app.bot.cogs.delivery_runtime import _configured_delivery_banner
+from app.bot.cogs.delivery_runtime import _prepare_delivery_banner
 from app.bot.components_v2 import CardLayout, add_action_row
 from app.db.session import SessionLocal
 from app.services.delivery_settings import (
@@ -294,11 +294,11 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
                 "**Banner:** aceita qualquer URL HTTP/HTTPS de imagem.",
-                "**Animação:** GIF/WebP animado é carregado diretamente pela URL no MediaGallery.",
+                "**Animação:** o arquivo é baixado uma vez e enviado como attachment:// no MediaGallery.",
             ],
             footer=(
                 "Imagens de produto/jogo continuam como ícone inline. "
-                "O bot não baixa nem converte o banner antes de publicar a entrega."
+                "O download é feito uma vez e reutilizado em cache nas próximas entregas."
             ),
             timeout=900,
         )
@@ -392,17 +392,25 @@ class DeliveryAdminView(discord.ui.LayoutView):
             client_mention=interaction.user.mention,
             items=[item],
         )
-        _, banner_url = _configured_delivery_banner(config)
-        await interaction.response.send_message(
-            view=CardLayout(
+        banner_file, banner_url, banner_error = await _prepare_delivery_banner(
+            config,
+            upload_limit=interaction.guild.filesize_limit,
+        )
+        kwargs: dict[str, object] = {
+            "view": CardLayout(
                 title=None,
                 lines=([title] if title else []) + lines,
                 footer=footer or None,
                 accent_colour=0x7B2CBF,
                 image_url=banner_url,
             ),
-            ephemeral=True,
-        )
+            "ephemeral": True,
+        }
+        if banner_file is not None:
+            kwargs["file"] = banner_file
+        if banner_error:
+            kwargs["content"] = f"Prévia sem banner: {banner_error}"
+        await interaction.response.send_message(**kwargs)
 
 
 async def send_delivery_admin(interaction: discord.Interaction) -> None:
