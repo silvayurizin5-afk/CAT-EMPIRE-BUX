@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.services.calculator import format_brl
+from app.services.delivery_media import DeliveryMediaError, validate_media_url
 
 # Emojis enviados explicitamente pelo usuário para o servidor NEXTBUY.
 VERIFY_EMOJI = "<a:verify:1550043693510037546>"
@@ -86,9 +87,10 @@ DEFAULT_DELIVERY_CONFIG: dict[str, object] = {
     "accent_color": "#23A55A",
     "show_image": True,
     "banner_enabled": True,
-    "banner_source": "local",
+    "banner_source": "url",
     "banner_mode": "animated",
-    "banner_url": "",
+    "banner_normalize_animation": True,
+    "banner_url": "https://cdn.discordapp.com/attachments/1549241356743090288/1551378076057997322/ENTREGA-REALIZADA.gif?ex=6ab1c0ec&is=6ab06f6c&hm=93bb08903e51895f8cb222af1f6dbff4a46796651740b89fc622570f5b89250e&",
     "delivery_emoji": VERIFY_EMOJI,
     "arrow_emoji": ARROW_EMOJI,
     "user_emoji": MEMBER_EMOJI,
@@ -113,6 +115,8 @@ def effective_delivery_config(raw: dict[str, Any] | None) -> dict[str, object]:
         if key not in raw or raw[key] is None:
             continue
         value = raw[key]
+        if key == "banner_url" and not str(value or "").strip():
+            continue
         legacy_values = _LEGACY_DEFAULTS.get(key)
         if legacy_values and isinstance(value, str) and value in legacy_values:
             # Atualiza apenas templates padrão antigos. Templates realmente personalizados são preservados.
@@ -247,18 +251,12 @@ def validate_delivery_templates(config: dict[str, object]) -> None:
     _format(str(config.get("footer_template") or ""), values)
     parse_hex_color(config.get("accent_color"))
 
-    banner_source = str(config.get("banner_source") or "local").strip().casefold()
-    if banner_source not in {"local", "url"}:
-        raise ValueError("A fonte do banner deve ser `local` ou `url`.")
-
-    banner_mode = str(config.get("banner_mode") or "static").strip().casefold()
-    if banner_mode not in {"static", "animated"}:
-        raise ValueError("O modo do banner deve ser `static` ou `animated`.")
-
     banner_url = str(config.get("banner_url") or "").strip()
-    if banner_source == "url" and banner_url:
-        if not banner_url.lower().startswith(("http://", "https://")):
-            raise ValueError("A URL do banner deve começar com http:// ou https://.")
+    if bool(config.get("banner_enabled", True)) and banner_url:
+        try:
+            validate_media_url(banner_url)
+        except DeliveryMediaError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 def product_line_values(item, config: dict[str, object] | None = None) -> dict[str, object]:
