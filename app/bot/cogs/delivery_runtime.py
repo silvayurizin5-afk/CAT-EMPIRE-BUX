@@ -1,4 +1,6 @@
 import re
+from pathlib import Path
+
 import discord
 from sqlalchemy import select
 
@@ -49,15 +51,21 @@ _THUMBNAIL_PRODUCT_TEMPLATE = (
     "{discount_line}"
 )
 _PRODUCTS_MARKER = "\uFFF0NEXTBUY_PRODUCTS\uFFF1"
-_DELIVERY_BANNER_URL = "https://cdn.discordapp.com/attachments/1549241356743090288/1551378076057997322/ENTREGA-REALIZADA.gif?ex=6ab1c0ec&is=6ab06f6c&hm=93bb08903e51895f8cb222af1f6dbff4a46796651740b89fc622570f5b89250e&"
+_DELIVERY_BANNER_PATH = Path(__file__).resolve().parents[2] / "assets" / "delivery_banner.gif"
+_DELIVERY_BANNER_FILENAME = "nextbuy-entrega.gif"
+_DELIVERY_BANNER_URL = f"attachment://{_DELIVERY_BANNER_FILENAME}"
 
 
 def _configured_delivery_banner(
     raw_config: dict[str, object] | None,
 ) -> tuple[discord.File | None, str]:
-    # Usa diretamente a URL configurada para a entrega; nenhum arquivo é anexado.
+    # O GIF é empacotado com o bot e anexado à própria mensagem.
+    # attachment:// é estável e não depende de links assinados temporários do CDN.
     _ = raw_config
-    return None, _DELIVERY_BANNER_URL
+    return (
+        discord.File(_DELIVERY_BANNER_PATH, filename=_DELIVERY_BANNER_FILENAME),
+        _DELIVERY_BANNER_URL,
+    )
 
 
 def _delivery_image(items) -> str | None:
