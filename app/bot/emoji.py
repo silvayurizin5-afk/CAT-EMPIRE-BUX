@@ -6,6 +6,48 @@ _CUSTOM_EMOJI_RE = re.compile(
     r"^<(?P<animated>a?):(?P<name>[A-Za-z0-9_]{1,32}):(?P<id>[0-9]{15,22})>$"
 )
 _EMOJI_ALIAS_RE = re.compile(r"(?<!<):(?P<name>[A-Za-z0-9_]{1,32}):(?![0-9])")
+_DISCORD_EMOJI_URL_RE = re.compile(
+    r"^https?://[^/]*discord(?:app)?\.(?:com|net)/emojis/"
+    r"(?P<id>[0-9]{15,22})\.(?P<ext>png|webp|gif)(?:\?.*)?$",
+    re.IGNORECASE,
+)
+
+
+def _guild_emoji(
+    guild: discord.Guild | None,
+    *,
+    name: str | None = None,
+    emoji_id: int | None = None,
+):
+    if guild is None:
+        return None
+    for emoji in guild.emojis:
+        if emoji_id is not None and emoji.id == emoji_id:
+            return emoji
+        if name is not None and emoji.name.casefold() == name.casefold():
+            return emoji
+    return None
+
+
+def _configured_guild_emoji(value: str, guild: discord.Guild | None):
+    if guild is None:
+        return None
+
+    alias = re.fullmatch(r":(?P<name>[A-Za-z0-9_]{1,32}):", value)
+    if alias:
+        return _guild_emoji(guild, name=alias.group("name"))
+
+    if value.isdigit():
+        return _guild_emoji(guild, emoji_id=int(value))
+
+    cdn = _DISCORD_EMOJI_URL_RE.fullmatch(value)
+    if cdn:
+        return _guild_emoji(guild, emoji_id=int(cdn.group("id")))
+
+    if re.fullmatch(r"[A-Za-z0-9_]{1,32}", value):
+        return _guild_emoji(guild, name=value)
+
+    return None
 
 
 def resolve_guild_emoji_aliases(value: str, guild: discord.Guild | None) -> str:
@@ -27,13 +69,31 @@ def resolve_guild_emoji_aliases(value: str, guild: discord.Guild | None) -> str:
     return _EMOJI_ALIAS_RE.sub(replace, text)
 
 
-def select_option_emoji(value: str | None) -> discord.PartialEmoji | str | None:
-    """Return only emoji values Discord accepts in select options.
+def emoji_display_value(value: str | None, guild: discord.Guild | None) -> str:
+    """Normaliza qualquer formato configurável de emoji para texto exibível."""
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
 
-    Product emoji fields are user-configurable and may contain plain text, an ID
-    without a name, or malformed custom-emoji markup. Passing those values
-    directly to discord.py makes the entire component payload invalid. Invalid
-    values are therefore omitted instead of breaking the store/admin panel.
+    if _CUSTOM_EMOJI_RE.fullmatch(cleaned):
+        return cleaned
+
+    configured = _configured_guild_emoji(cleaned, guild)
+    if configured is not None:
+        return str(configured)
+
+    return cleaned
+
+
+def select_option_emoji(
+    value: str | None,
+    guild: discord.Guild | None = None,
+) -> discord.PartialEmoji | str | None:
+    """Converte emojis configuráveis para um valor aceito por SelectOption.
+
+    Aceita Unicode, mention customizado estático/animado, :alias:, nome do emoji,
+    ID do emoji e URL CDN de emoji do Discord. Formatos que o Discord não aceita
+    como emoji de opção são omitidos para não invalidar o componente inteiro.
     """
     cleaned = (value or "").strip()
     if not cleaned:
@@ -47,9 +107,19 @@ def select_option_emoji(value: str | None) -> discord.PartialEmoji | str | None:
             animated=bool(custom.group("animated")),
         )
 
-    # Unicode emoji contain at least one non-ASCII code point. Plain text such
-    # as "gift" is intentionally rejected because Discord rejects it as an
-    # option emoji name.
+    configured = _configured_guild_emoji(cleaned, guild)
+    if configured is not None:
+        return discord.PartialEmoji(
+            name=configured.name,
+            id=configured.id,
+            animated=bool(getattr(configured, "animated", False)),
+        )
+
+    if cleaned.startswith(("http://", "https://")):
+        return None
+
+    # Unicode emoji contêm ao menos um codepoint não ASCII. Texto ASCII simples
+    # não é enviado como emoji porque a API do Discord rejeita esse formato.
     if any(ord(char) > 127 for char in cleaned):
         return cleaned
     return None

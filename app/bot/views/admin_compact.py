@@ -7,7 +7,8 @@ from app.bot.views.economy_admin import send_economy_management
 from app.bot.views.embed_builder import send_embed_builder
 from app.bot.views.rank_admin import send_rank_tier_management
 from app.bot.views.store_panel_admin import send_store_panel_admin
-from app.bot.views.terms_admin import send_terms_management
+from app.bot.views.terms_admin import send_terms_management, send_terms_panel_settings
+from app.bot.views.terms_public import publish_terms_panel
 from app.bot.views.ticket_admin import TicketMessagesModal, send_ticket_management
 from app.db.session import SessionLocal
 from app.services.configs import get_or_create_guild_config
@@ -37,7 +38,13 @@ ADMIN_ACTIONS = (
     ("ticket_messages", "Mensagens dos tickets", "Editar textos automáticos dos pedidos"),
     ("manage_tickets", "Gerenciar tickets", "Consultar e excluir tickets fora do canal atual"),
     ("new_terms", "Criar ou atualizar termo", "Cadastrar uma nova versão de termo"),
-    ("manage_terms", "Gerenciar termos", "Editar, ativar ou desativar termos"),
+    ("manage_terms", "Gerenciar termos", "Editar conteúdo, aparência, emojis, URLs e status"),
+    (
+        "terms_panel",
+        "Configurar painel de termos",
+        "Título, descrição, emoji, banner e thumbnail",
+    ),
+    ("publish_terms", "Publicar Termos", "Publicar ou atualizar o painel no canal atual"),
     ("new_rank", "Criar faixa de cliente", "Vincular faixa e cargo"),
     ("manage_ranks", "Gerenciar faixas", "Editar metas e ativação"),
     (
@@ -181,6 +188,14 @@ class CompactAdminPanelView(discord.ui.LayoutView):
 
         if action == "manage_terms":
             await send_terms_management(interaction)
+            return
+
+        if action == "terms_panel":
+            await send_terms_panel_settings(interaction)
+            return
+
+        if action == "publish_terms":
+            await publish_terms_panel(interaction)
             return
 
         if action == "new_rank":

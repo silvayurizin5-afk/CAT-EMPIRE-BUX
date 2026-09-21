@@ -131,6 +131,31 @@ class GuildConfig(Base, TimestampMixin):
     feedback_emoji: Mapped[str] = mapped_column(String(128), default="🐱", server_default="🐱")
     feedback_reminder_minutes: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
     feedback_dm_cooldown_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
+    terms_panel_title: Mapped[str] = mapped_column(
+        String(160),
+        default="Termos e Políticas da NEXTBUY",
+        server_default="Termos e Políticas da NEXTBUY",
+    )
+    terms_panel_description: Mapped[str] = mapped_column(
+        Text,
+        default=(
+            "Antes de realizar qualquer compra, leia atentamente nossos termos "
+            "para entender entregas, garantias, reembolsos, suporte e responsabilidades."
+        ),
+        server_default=(
+            "Antes de realizar qualquer compra, leia atentamente nossos termos "
+            "para entender entregas, garantias, reembolsos, suporte e responsabilidades."
+        ),
+    )
+    terms_panel_emoji: Mapped[str] = mapped_column(
+        String(128),
+        default="📜",
+        server_default="📜",
+    )
+    terms_panel_banner_url: Mapped[str | None] = mapped_column(Text)
+    terms_panel_thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    terms_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    terms_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Product(Base, TimestampMixin):
@@ -290,6 +315,9 @@ class TermsDocument(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text)
     ephemeral_message: Mapped[str] = mapped_column(Text, default="", server_default="")
     emoji: Mapped[str | None] = mapped_column(String(128))
+    summary: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    image_url: Mapped[str | None] = mapped_column(Text)
+    link_url: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 

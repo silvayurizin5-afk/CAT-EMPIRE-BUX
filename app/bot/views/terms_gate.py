@@ -1,7 +1,12 @@
 import discord
 
-from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
-from app.bot.emoji import select_option_emoji
+from app.bot.components_v2 import DEFAULT_ACCENT, add_action_row
+from app.bot.emoji import (
+    emoji_display_value,
+    resolve_guild_emoji_aliases,
+    select_option_emoji,
+)
+from app.bot.views.terms_public import safe_http_url
 from app.db.models import TermsDocument
 from app.db.session import SessionLocal
 from app.services.terms import accept_current_terms, list_missing_terms
@@ -12,33 +17,15 @@ def _terms_snapshot(terms: list[TermsDocument]) -> frozenset[tuple[int, int]]:
     return frozenset((item.id, item.version) for item in terms)
 
 
-def _terms_lines(terms: list[TermsDocument], selected: TermsDocument | None = None) -> list[str]:
-    if selected is not None:
-        return [
-            selected.content,
-            f"-# Versão {selected.version}",
-        ]
-    lines = [
-        f"- {item.emoji + ' ' if item.emoji else ''}**{item.title}** — versão {item.version}"
-        for item in terms
-    ]
-    return [
-        "Antes de concluir a compra, leia os termos vigentes abaixo.",
-        "Use o seletor para abrir cada seção e depois aceite para continuar.",
-        "**Pendentes**",
-        *(lines or ["Nenhum termo pendente."]),
-    ]
-
-
 class TermsGateSelect(discord.ui.Select):
-    def __init__(self, terms: list[TermsDocument]) -> None:
+    def __init__(self, terms: list[TermsDocument], guild: discord.Guild) -> None:
         self._terms = {item.id: item for item in terms}
         options = [
             discord.SelectOption(
                 label=item.title[:100],
                 value=str(item.id),
-                description=f"Versão {item.version}"[:100],
-                emoji=select_option_emoji(item.emoji),
+                description=(item.summary or f"Versão {item.version}")[:100],
+                emoji=select_option_emoji(item.emoji, guild),
             )
             for item in terms[:25]
         ]
@@ -56,11 +43,6 @@ class TermsGateSelect(discord.ui.Select):
         if isinstance(self.view, TermsGateView):
             self.view.set_selected(term)
             await interaction.response.edit_message(content=None, embeds=[], view=self.view)
-            if term.ephemeral_message:
-                await interaction.followup.send(
-                    term.ephemeral_message[:2000],
-                    ephemeral=True,
-                )
 
 
 class TermsGateView(discord.ui.LayoutView):
@@ -68,6 +50,7 @@ class TermsGateView(discord.ui.LayoutView):
         self,
         terms: list[TermsDocument],
         resume_view: discord.ui.View | discord.ui.LayoutView,
+        guild: discord.Guild,
     ) -> None:
         if not terms:
             raise ValueError("TermsGateView exige pelo menos um termo")
@@ -75,23 +58,77 @@ class TermsGateView(discord.ui.LayoutView):
         self._terms = terms
         self._terms_versions = _terms_snapshot(terms)
         self._resume_view = resume_view
+        self._guild = guild
         self._selected: TermsDocument | None = None
         self._render()
 
     def _render(self) -> None:
         self.clear_items()
         selected = self._selected
-        card = CardLayout(
-            title=selected.title if selected is not None else "Termos necessários",
-            lines=_terms_lines(self._terms, selected),
-            footer="NEXTBUY • Termos",
-            timeout=300,
-        )
-        self.container = card.container
-        card.remove_item(card.container)
-        self.add_item(self.container)
+        children: list[discord.ui.Item] = []
 
-        add_select_row(self.container, TermsGateSelect(self._terms))
+        if selected is None:
+            pending = [
+                (
+                    f"- {emoji_display_value(item.emoji, self._guild) + ' ' if item.emoji else ''}"
+                    f"**{item.title}** — versão {item.version}"
+                )
+                for item in self._terms
+            ]
+            body = "\n".join(
+                [
+                    "## Termos necessários",
+                    "Antes de concluir a compra, leia os termos vigentes abaixo.",
+                    "Use o seletor para abrir cada seção e depois aceite para continuar.",
+                    "",
+                    "**Pendentes**",
+                    *pending,
+                ]
+            )
+            children.append(discord.ui.TextDisplay(body))
+        else:
+            emoji = emoji_display_value(selected.emoji, self._guild)
+            prefix = f"{emoji} " if emoji else ""
+            content = resolve_guild_emoji_aliases(selected.content, self._guild)
+            children.append(
+                discord.ui.TextDisplay(f"## {prefix}{selected.title}\n{content}")
+            )
+
+            image_url = safe_http_url(selected.image_url)
+            if image_url:
+                children.append(discord.ui.MediaGallery(discord.MediaGalleryItem(image_url)))
+
+            if selected.ephemeral_message.strip():
+                children.append(discord.ui.Separator())
+                children.append(
+                    discord.ui.TextDisplay(
+                        resolve_guild_emoji_aliases(
+                            selected.ephemeral_message,
+                            self._guild,
+                        )
+                    )
+                )
+
+            link_url = safe_http_url(selected.link_url)
+            if link_url:
+                children.append(
+                    discord.ui.ActionRow(
+                        discord.ui.Button(
+                            label="Abrir link",
+                            style=discord.ButtonStyle.link,
+                            url=link_url,
+                        )
+                    )
+                )
+
+            children.append(discord.ui.Separator())
+            children.append(
+                discord.ui.TextDisplay(f"-# NEXTBUY • Versão {selected.version}")
+            )
+
+        self.container = discord.ui.Container(*children, accent_colour=DEFAULT_ACCENT)
+        self.add_item(self.container)
+        add_action_row(self.container, TermsGateSelect(self._terms, self._guild))
         accept = discord.ui.Button(
             label="Aceitar termos",
             style=discord.ButtonStyle.success,
@@ -129,7 +166,11 @@ class TermsGateView(discord.ui.LayoutView):
                 await interaction.edit_original_response(
                     content=None,
                     embeds=[],
-                    view=TermsGateView(current_missing, self._resume_view),
+                    view=TermsGateView(
+                        current_missing,
+                        self._resume_view,
+                        interaction.guild,
+                    ),
                 )
                 return
             await interaction.edit_original_response(
@@ -168,6 +209,6 @@ async def require_current_terms(
     await interaction.edit_original_response(
         content=None,
         embeds=[],
-        view=TermsGateView(missing, resume_view),
+        view=TermsGateView(missing, resume_view, interaction.guild),
     )
     return False

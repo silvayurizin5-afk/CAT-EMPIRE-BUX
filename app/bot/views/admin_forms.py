@@ -177,7 +177,12 @@ class TermsModal(discord.ui.Modal, title="Criar/atualizar termo"):
     content = discord.ui.TextInput(
         label="Conteúdo", style=discord.TextStyle.paragraph, max_length=4000
     )
-    emoji = discord.ui.TextInput(label="Emoji", required=False, max_length=128)
+    emoji = discord.ui.TextInput(
+        label="Emoji",
+        required=False,
+        max_length=128,
+        placeholder="Unicode, custom, animado, :alias:, nome ou ID",
+    )
     ephemeral_message = discord.ui.TextInput(
         label="Submensagem ephemeral ao selecionar",
         required=False,

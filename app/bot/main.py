@@ -43,6 +43,7 @@ class NextBuyBot(commands.Bot):
             tree_cls=StoreOnlyCommandTree,
         )
         self._feedback_permissions_synced = False
+        self._terms_views_restored = False
 
     async def _restore_ticket_views(self) -> None:
         from sqlalchemy import select
@@ -124,6 +125,12 @@ async def on_ready() -> None:
             "IA sem provedor disponível. Configure GROQ_API_KEY, GEMINI_API_KEY ou "
             "OPENROUTER_API_KEY no .env."
         )
+
+    if not bot._terms_views_restored:
+        from app.bot.views.terms_public import restore_terms_panel_views
+
+        await restore_terms_panel_views(bot)
+        bot._terms_views_restored = True
 
     if bot._feedback_permissions_synced:
         return
