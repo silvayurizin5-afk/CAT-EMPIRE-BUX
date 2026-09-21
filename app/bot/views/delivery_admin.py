@@ -219,7 +219,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
             ],
             footer=(
                 "Imagens de produto/jogo continuam como ícone inline. "
-                "O banner público não é reenviado como arquivo pelo bot."
+                "O banner é anexado à própria mensagem para não expirar."
             ),
             timeout=900,
         )
@@ -301,7 +301,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
             client_mention=interaction.user.mention,
             items=[item],
         )
-        _, banner_url = _configured_delivery_banner(config)
+        banner_file, banner_url = _configured_delivery_banner(config)
         await interaction.response.send_message(
             view=CardLayout(
                 title=None,
@@ -310,6 +310,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 accent_colour=0x7B2CBF,
                 image_url=banner_url,
             ),
+            file=banner_file,
             ephemeral=True,
         )
 
