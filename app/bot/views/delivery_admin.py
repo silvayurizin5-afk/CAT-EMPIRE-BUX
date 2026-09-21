@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import discord
 
-from app.bot.cogs.delivery_runtime import _configured_delivery_banner, _prepare_delivery_banner
+from app.bot.cogs.delivery_runtime import _configured_delivery_banner
 from app.bot.components_v2 import CardLayout, add_action_row
 from app.db.session import SessionLocal
 from app.services.delivery_settings import (
@@ -154,87 +154,68 @@ class DeliveryBannerModal(discord.ui.Modal, title="Banner da entrega"):
             style=discord.TextStyle.paragraph,
             max_length=1800,
             default=str(config.get("banner_url") or "")[:1800],
-            placeholder="Qualquer URL http/https de imagem, inclusive Discord CDN.",
-        )
-        self.normalize = discord.ui.TextInput(
-            label="Corrigir/normalizar animação? sim/não",
-            max_length=3,
-            default=(
-                "sim"
-                if bool(config.get("banner_normalize_animation", True))
-                else "não"
-            ),
+            placeholder="URL http/https usada diretamente pelo Components V2.",
         )
         self.add_item(self.enabled)
         self.add_item(self.url)
-        self.add_item(self.normalize)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
 
         enabled = str(self.enabled).strip().casefold()
-        normalize = str(self.normalize).strip().casefold()
-        if enabled not in {"sim", "nao", "não"} or normalize not in {"sim", "nao", "não"}:
+        if enabled not in {"sim", "nao", "não"}:
             await interaction.response.send_message(
-                "Use apenas `sim` ou `não` nos campos de ativação.",
+                "Use apenas `sim` ou `não` no campo de ativação.",
                 ephemeral=True,
             )
             return
 
         url = str(self.url).strip()
+        if enabled == "sim":
+            if not url:
+                await interaction.response.send_message(
+                    "Informe a URL do banner.",
+                    ephemeral=True,
+                )
+                return
+            if not url.lower().startswith(("http://", "https://")):
+                await interaction.response.send_message(
+                    "A URL do banner deve começar com http:// ou https://.",
+                    ephemeral=True,
+                )
+                return
+
         config = await _load_config(interaction.guild.id)
         config.update(
             {
                 "banner_enabled": enabled == "sim",
                 "banner_source": "url",
                 "banner_mode": "animated",
-                "banner_normalize_animation": normalize == "sim",
                 "banner_url": url,
             }
         )
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             await _save_config(interaction.guild.id, config)
         except ValueError as exc:
-            await interaction.edit_original_response(content=str(exc))
+            await interaction.response.send_message(str(exc), ephemeral=True)
             return
 
         if enabled != "sim":
-            await interaction.edit_original_response(
-                content="Banner de entregas desativado."
+            await interaction.response.send_message(
+                "Banner de entregas desativado.",
+                ephemeral=True,
             )
             return
 
-        if not url:
-            await interaction.edit_original_response(
-                content="Banner ativado, mas nenhuma URL foi informada."
-            )
-            return
-
-        banner_file, banner_url, filename = await _prepare_delivery_banner(
-            config,
-            upload_limit=interaction.guild.filesize_limit,
+        await interaction.response.send_message(
+            (
+                "Banner salvo. O Components V2 vai carregar a URL diretamente no "
+                "MediaGallery, sem download, conversão ou upload pelo bot."
+            ),
+            ephemeral=True,
         )
-        if banner_file is not None:
-            banner_file.close()
-
-        if filename:
-            await interaction.edit_original_response(
-                content=(
-                    "Banner salvo e processado com sucesso.\n"
-                    f"**Arquivo enviado ao Discord:** `{filename}`\n"
-                    f"**Referência usada no Components V2:** `{banner_url}`"
-                )
-            )
-        else:
-            await interaction.edit_original_response(
-                content=(
-                    "Banner salvo. Não consegui converter essa mídia, então o Discord "
-                    "vai tentar carregar a **URL diretamente** no MediaGallery."
-                )
-            )
 
 
 class DeliveryEmojiModal(discord.ui.Modal, title="Emojis principais da entrega"):
@@ -313,11 +294,11 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
                 "**Banner:** aceita qualquer URL HTTP/HTTPS de imagem.",
-                "**Animação:** GIF/APNG/WebP animado pode ser normalizado automaticamente para evitar frames piscando.",
+                "**Animação:** GIF/WebP animado é carregado diretamente pela URL no MediaGallery.",
             ],
             footer=(
                 "Imagens de produto/jogo continuam como ícone inline. "
-                "O banner pode ser reprocessado e anexado à própria mensagem."
+                "O bot não baixa nem converte o banner antes de publicar a entrega."
             ),
             timeout=900,
         )
