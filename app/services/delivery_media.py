@@ -14,7 +14,7 @@ from PIL import Image, ImageSequence
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _PREFERRED_DELIVERY_BYTES = 6 * 1024 * 1024
 _CACHE_SIZE = 8
-_CACHE: OrderedDict[tuple[str, int], "PreparedDeliveryMedia"] = OrderedDict()
+_CACHE: OrderedDict[tuple[str, int], PreparedDeliveryMedia] = OrderedDict()
 
 
 class DeliveryMediaError(ValueError):
