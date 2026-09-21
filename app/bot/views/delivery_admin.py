@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import discord
 
-from app.bot.cogs.delivery_runtime import _configured_delivery_banner
+from app.bot.cogs.delivery_runtime import _configured_delivery_banner, _prepare_delivery_banner
 from app.bot.components_v2 import CardLayout, add_action_row
 from app.db.session import SessionLocal
 from app.services.delivery_settings import (
@@ -140,6 +140,103 @@ class DeliveryVisualModal(discord.ui.Modal, title="Visual da entrega"):
         await interaction.response.send_message("Visual de entrega atualizado.", ephemeral=True)
 
 
+class DeliveryBannerModal(discord.ui.Modal, title="Banner da entrega"):
+    def __init__(self, config: dict[str, object]) -> None:
+        super().__init__()
+        self.enabled = discord.ui.TextInput(
+            label="Ativar banner? sim/não",
+            max_length=3,
+            default="sim" if bool(config.get("banner_enabled", True)) else "não",
+        )
+        self.url = discord.ui.TextInput(
+            label="URL da imagem/GIF/WebP",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1800,
+            default=str(config.get("banner_url") or "")[:1800],
+            placeholder="Qualquer URL http/https de imagem, inclusive Discord CDN.",
+        )
+        self.normalize = discord.ui.TextInput(
+            label="Corrigir/normalizar animação? sim/não",
+            max_length=3,
+            default=(
+                "sim"
+                if bool(config.get("banner_normalize_animation", True))
+                else "não"
+            ),
+        )
+        self.add_item(self.enabled)
+        self.add_item(self.url)
+        self.add_item(self.normalize)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+
+        enabled = str(self.enabled).strip().casefold()
+        normalize = str(self.normalize).strip().casefold()
+        if enabled not in {"sim", "nao", "não"} or normalize not in {"sim", "nao", "não"}:
+            await interaction.response.send_message(
+                "Use apenas `sim` ou `não` nos campos de ativação.",
+                ephemeral=True,
+            )
+            return
+
+        url = str(self.url).strip()
+        config = await _load_config(interaction.guild.id)
+        config.update(
+            {
+                "banner_enabled": enabled == "sim",
+                "banner_source": "url",
+                "banner_mode": "animated",
+                "banner_normalize_animation": normalize == "sim",
+                "banner_url": url,
+            }
+        )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await _save_config(interaction.guild.id, config)
+        except ValueError as exc:
+            await interaction.edit_original_response(content=str(exc))
+            return
+
+        if enabled != "sim":
+            await interaction.edit_original_response(
+                content="Banner de entregas desativado."
+            )
+            return
+
+        if not url:
+            await interaction.edit_original_response(
+                content="Banner ativado, mas nenhuma URL foi informada."
+            )
+            return
+
+        banner_file, banner_url, filename = await _prepare_delivery_banner(
+            config,
+            upload_limit=interaction.guild.filesize_limit,
+        )
+        if banner_file is not None:
+            banner_file.close()
+
+        if filename:
+            await interaction.edit_original_response(
+                content=(
+                    "Banner salvo e processado com sucesso.\n"
+                    f"**Arquivo enviado ao Discord:** `{filename}`\n"
+                    f"**Referência usada no Components V2:** `{banner_url}`"
+                )
+            )
+        else:
+            await interaction.edit_original_response(
+                content=(
+                    "Banner salvo. Não consegui converter essa mídia, então o Discord "
+                    "vai tentar carregar a **URL diretamente** no MediaGallery."
+                )
+            )
+
+
 class DeliveryEmojiModal(discord.ui.Modal, title="Emojis principais da entrega"):
     def __init__(self, config: dict[str, object]) -> None:
         super().__init__()
@@ -215,11 +312,12 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 "**Emojis:** `{delivery}`, `{arrow}`, `{user}`, `{separator}`, `{verified}`, `{order_icon}`, `{game_emoji}`, `{product_emoji}`, `{discount_emoji}`",
                 "**Produto:** `{product}`, `{game}`, `{game_or_product}`, `{quantity}`, `{unit_price}`, `{line_total}`, `{robux_part}`, `{discount_line}`",
                 "Texto, markdown e emojis customizados podem ser colocados diretamente nos templates.",
-                "**Banner:** GIF ENTREGA REALIZADA carregado diretamente pela URL do Discord CDN.",
+                "**Banner:** aceita qualquer URL HTTP/HTTPS de imagem.",
+                "**Animação:** GIF/APNG/WebP animado pode ser normalizado automaticamente para evitar frames piscando.",
             ],
             footer=(
                 "Imagens de produto/jogo continuam como ícone inline. "
-                "O banner é anexado à própria mensagem para não expirar."
+                "O banner pode ser reprocessado e anexado à própria mensagem."
             ),
             timeout=900,
         )
@@ -248,6 +346,12 @@ class DeliveryAdminView(discord.ui.LayoutView):
             edit_product_emojis,
             preview,
         )
+        edit_banner = discord.ui.Button(
+            label="Banner",
+            style=discord.ButtonStyle.secondary,
+        )
+        edit_banner.callback = self._edit_banner
+        add_action_row(self.container, edit_banner)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner_id:
@@ -266,6 +370,12 @@ class DeliveryAdminView(discord.ui.LayoutView):
             return
         config = await _load_config(interaction.guild.id)
         await interaction.response.send_modal(DeliveryVisualModal(config))
+
+    async def _edit_banner(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+        config = await _load_config(interaction.guild.id)
+        await interaction.response.send_modal(DeliveryBannerModal(config))
 
     async def _edit_emojis(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -301,7 +411,7 @@ class DeliveryAdminView(discord.ui.LayoutView):
             client_mention=interaction.user.mention,
             items=[item],
         )
-        banner_file, banner_url = _configured_delivery_banner(config)
+        _, banner_url = _configured_delivery_banner(config)
         await interaction.response.send_message(
             view=CardLayout(
                 title=None,
@@ -310,7 +420,6 @@ class DeliveryAdminView(discord.ui.LayoutView):
                 accent_colour=0x7B2CBF,
                 image_url=banner_url,
             ),
-            file=banner_file,
             ephemeral=True,
         )
 
