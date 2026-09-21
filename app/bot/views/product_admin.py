@@ -472,7 +472,7 @@ class ProductManagementView(discord.ui.LayoutView):
             title="Gerenciar produtos",
             description=(
                 "Escolha um produto para editar preço, estoque, visual, "
-                "valor em Robux ou status."
+                "Robux direto ou status. Game Pass calcula Robux pelo preço em R$."
             ),
             timeout=180,
         )
