@@ -236,6 +236,8 @@ async def process_stripe_order_incident_event(
         amount_refunded = int(resource.get("amount_refunded") or 0)
         fully_refunded = amount > 0 and amount_refunded >= amount
         incident_status = "refunded" if fully_refunded else "partially_refunded"
+        if payment.status == incident_status:
+            return order
         payment.status = incident_status
 
         if fully_refunded and order.status != "refunded":
@@ -262,6 +264,8 @@ async def process_stripe_order_incident_event(
             )
     elif event_type == "charge.dispute.created":
         incident_status = "disputed"
+        if payment.status == incident_status:
+            return order
         payment.status = incident_status
         await lock_commerce_account(
             session,
