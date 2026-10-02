@@ -12,9 +12,13 @@ import discord
 import httpx
 from PIL import Image, ImageSequence
 
+from app.core.network_security import PublicHTTPError, download_public_http_bytes
+
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _PREFERRED_PANEL_BYTES = 3 * 1024 * 1024
 _CACHE_SIZE = 4
+_MAX_IMAGE_PIXELS = 24_000_000
+_MAX_ANIMATION_FRAMES = 500
 _CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
 
 
@@ -70,37 +74,20 @@ def _looks_like_gif(url: str | None) -> bool:
 
 
 async def _download_image(url: str) -> bytes:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise StoreBannerError("A URL do banner precisa ser HTTP/HTTPS.")
-
     timeout = httpx.Timeout(25.0, connect=10.0)
     headers = {"User-Agent": "NEXTBUY/1.0 DiscordBot"}
-    data = bytearray()
-
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
+        return await download_public_http_bytes(
+            url,
+            max_bytes=_MAX_DOWNLOAD_BYTES,
             timeout=timeout,
             headers=headers,
-        ) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                content_type = (response.headers.get("content-type") or "").casefold()
-                if content_type and not content_type.startswith("image/"):
-                    raise StoreBannerError("A URL informada não retornou uma imagem.")
-                async for chunk in response.aiter_bytes():
-                    data.extend(chunk)
-                    if len(data) > _MAX_DOWNLOAD_BYTES:
-                        raise StoreBannerError(
-                            "O GIF ultrapassa 64 MB. Use uma origem menor para o banner."
-                        )
-    except httpx.HTTPError as exc:
-        raise StoreBannerError("Não consegui baixar o banner pela URL informada.") from exc
-
-    if not data:
-        raise StoreBannerError("O banner retornou um arquivo vazio.")
-    return bytes(data)
+            require_content_type_prefix="image/",
+        )
+    except PublicHTTPError as exc:
+        raise StoreBannerError(
+            "Não consegui baixar um banner público válido pela URL informada."
+        ) from exc
 
 
 def _open_animated(data: bytes) -> Image.Image:
@@ -109,7 +96,12 @@ def _open_animated(data: bytes) -> Image.Image:
         image.seek(0)
     except (OSError, ValueError) as exc:
         raise StoreBannerError("O arquivo do banner não é uma imagem válida.") from exc
-    if not getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) <= 1:
+    if image.width * image.height > _MAX_IMAGE_PIXELS:
+        raise StoreBannerError("O banner possui resolução excessiva.")
+    frame_count = int(getattr(image, "n_frames", 1) or 1)
+    if frame_count > _MAX_ANIMATION_FRAMES:
+        raise StoreBannerError("O banner possui quadros demais para processamento seguro.")
+    if not getattr(image, "is_animated", False) or frame_count <= 1:
         raise StoreBannerError("O arquivo informado não é um GIF animado.")
     return image
 
