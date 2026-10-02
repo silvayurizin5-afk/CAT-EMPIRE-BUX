@@ -11,6 +11,7 @@ from app.db.order_payment_models import OrderPayment
 from app.db.store_models import StoreCoupon
 from app.integrations.stripe_gateway import StripeGateway
 from app.services.audit import write_audit_log
+from app.services.commerce_locks import lock_commerce_account
 
 
 class StripeOrderValidationError(ValueError):
@@ -185,6 +186,112 @@ async def process_stripe_order_checkout_event(
             "provider": "stripe",
             "checkout_session_id": session_id,
             "payment_intent_id": payment_intent_id,
+        },
+    )
+    await session.flush()
+    return order
+
+
+async def process_stripe_order_incident_event(
+    session: AsyncSession,
+    *,
+    event_type: str,
+    resource: dict,
+) -> Order | None:
+    order_id = _extract_order_id(resource)
+    payment_intent_id = _extract_payment_intent_id(resource)
+
+    payment: OrderPayment | None = None
+    if order_id is not None:
+        payment = await session.scalar(
+            select(OrderPayment)
+            .where(OrderPayment.order_id == order_id, OrderPayment.provider == "stripe")
+            .with_for_update()
+        )
+    elif payment_intent_id:
+        payment = await session.scalar(
+            select(OrderPayment)
+            .where(
+                OrderPayment.payment_intent_id == payment_intent_id,
+                OrderPayment.provider == "stripe",
+            )
+            .with_for_update()
+        )
+    if payment is None:
+        return None
+
+    order = await session.scalar(
+        select(Order).where(Order.id == payment.order_id).with_for_update()
+    )
+    if order is None:
+        raise StripeOrderValidationError("Pedido Stripe do incidente não encontrado")
+    user = await session.scalar(
+        select(User).where(User.id == order.user_id).with_for_update()
+    )
+    if user is None:
+        raise StripeOrderValidationError("Cliente do pedido Stripe não encontrado")
+
+    if event_type == "charge.refunded":
+        amount = int(resource.get("amount") or 0)
+        amount_refunded = int(resource.get("amount_refunded") or 0)
+        fully_refunded = amount > 0 and amount_refunded >= amount
+        incident_status = "refunded" if fully_refunded else "partially_refunded"
+        payment.status = incident_status
+
+        if fully_refunded and order.status != "refunded":
+            was_delivered = order.status == "delivered"
+            user.total_spent = max(
+                money("0"),
+                money(user.total_spent - order.total_credits),
+            )
+            if not was_delivered:
+                await _restore_reserved_resources(session, order)
+            order.status = "refunded"
+        elif not fully_refunded:
+            await lock_commerce_account(
+                session,
+                guild_id=order.guild_id,
+                user_id=order.user_id,
+                reason=(
+                    "Pedido Stripe recebeu reembolso parcial. "
+                    "A conta comercial foi bloqueada para revisão manual."
+                ),
+                source_topup_id=None,
+                provider_status=incident_status,
+                provider_status_detail=event_type,
+            )
+    elif event_type == "charge.dispute.created":
+        incident_status = "disputed"
+        payment.status = incident_status
+        await lock_commerce_account(
+            session,
+            guild_id=order.guild_id,
+            user_id=order.user_id,
+            reason=(
+                "Pedido Stripe recebeu uma contestação. "
+                "A conta comercial foi bloqueada para revisão manual."
+            ),
+            source_topup_id=None,
+            provider_status=incident_status,
+            provider_status_detail=event_type,
+        )
+    else:
+        return None
+
+    await write_audit_log(
+        session,
+        guild_id=order.guild_id,
+        actor_discord_id=None,
+        action="order.payment_incident",
+        target_type="order",
+        target_id=str(order.id),
+        details={
+            "customer_discord_id": user.discord_user_id,
+            "provider": "stripe",
+            "provider_status": incident_status,
+            "event_type": event_type,
+            "payment_intent_id": payment_intent_id,
+            "amount_refunded_minor": int(resource.get("amount_refunded") or 0),
         },
     )
     await session.flush()
