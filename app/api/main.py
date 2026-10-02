@@ -13,6 +13,7 @@ from app.integrations.stripe_gateway import StripeWebhookError, verify_stripe_ev
 from app.services.stripe_orders import (
     StripeOrderValidationError,
     process_stripe_order_checkout_event,
+    process_stripe_order_incident_event,
 )
 from app.services.stripe_topups import (
     StripeTopUpValidationError,
@@ -109,11 +110,17 @@ async def stripe_webhook(
                     checkout=resource,
                 )
             else:
-                processed = await process_stripe_incident_event(
+                processed = await process_stripe_order_incident_event(
                     session,
                     event_type=event_type,
                     resource=resource,
                 )
+                if processed is None:
+                    processed = await process_stripe_incident_event(
+                        session,
+                        event_type=event_type,
+                        resource=resource,
+                    )
     except (StripeOrderValidationError, StripeTopUpValidationError) as exc:
         logger.warning("Webhook Stripe rejeitado: %s", exc)
         raise HTTPException(status_code=400, detail="invalid stripe event") from exc
