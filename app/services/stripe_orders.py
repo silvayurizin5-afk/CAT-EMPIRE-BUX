@@ -248,6 +248,19 @@ async def process_stripe_order_incident_event(
             )
             if not was_delivered:
                 await _restore_reserved_resources(session, order)
+            else:
+                await lock_commerce_account(
+                    session,
+                    guild_id=order.guild_id,
+                    user_id=order.user_id,
+                    reason=(
+                        "Pedido Stripe já entregue recebeu reembolso total. "
+                        "A conta comercial foi bloqueada para revisão manual."
+                    ),
+                    source_topup_id=None,
+                    provider_status=incident_status,
+                    provider_status_detail=event_type,
+                )
             order.status = "refunded"
         elif not fully_refunded:
             await lock_commerce_account(
