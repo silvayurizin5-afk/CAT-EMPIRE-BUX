@@ -14,7 +14,7 @@ async def confirm_manual_pix_payment(
     session: AsyncSession,
     *,
     order_id: UUID,
-    actor_discord_id: int,
+    actor_discord_id: int | None,
 ) -> Order:
     order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
     if order is None:
