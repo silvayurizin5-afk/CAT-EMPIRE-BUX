@@ -8,9 +8,15 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.db.models import CreditTopUp, Order, OrderItem, RobuxRate, User, WalletTransaction
+from app.db.models import CreditTopUp, Order, OrderItem, Product, RobuxRate, User, WalletTransaction
 from app.db.payment_models import TopUpNotification
-from app.services.orders import create_robux_order, pay_order_with_credits, refund_order
+from app.services.orders import (
+    TooManyPendingOrdersError,
+    create_product_order,
+    create_robux_order,
+    pay_order_with_credits,
+    refund_order,
+)
 from app.services.topups import process_approved_payment
 from app.services.users import get_or_create_user
 from app.services.wallets import InsufficientCreditsError, apply_wallet_transaction, get_balance
@@ -295,5 +301,114 @@ async def test_robux_order_uses_current_locked_rate_not_stale_object() -> None:
                 await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
                 await session.execute(delete(Order).where(Order.id == order_id))
             await session.execute(delete(RobuxRate).where(RobuxRate.id == rate_id))
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_order_limit_blocks_inventory_reservation_abuse() -> None:
+    engine, sessions = _database()
+    guild_id = 777001
+    async with sessions() as session, session.begin():
+        user = await get_or_create_user(session, _discord_id())
+        user_id = user.id
+        product = Product(
+            guild_id=guild_id,
+            name="Produto teste",
+            slug=f"produto-{uuid4().hex[:8]}",
+            product_type="item",
+            price_credits=Decimal("10.00"),
+            stock_quantity=10,
+            active=True,
+        )
+        session.add(product)
+        await session.flush()
+        product_id = product.id
+
+    order_ids = []
+    try:
+        for _ in range(2):
+            async with sessions() as session, session.begin():
+                product = await session.get(Product, product_id)
+                order = await create_product_order(
+                    session,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    product=product,
+                )
+                order_ids.append(order.id)
+
+        with pytest.raises(TooManyPendingOrdersError):
+            async with sessions() as session, session.begin():
+                product = await session.get(Product, product_id)
+                await create_product_order(
+                    session,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    product=product,
+                )
+
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None
+            assert product.stock_quantity == 8
+    finally:
+        async with sessions() as session, session.begin():
+            if order_ids:
+                await session.execute(delete(OrderItem).where(OrderItem.order_id.in_(order_ids)))
+                await session.execute(delete(Order).where(Order.id.in_(order_ids)))
+            await session.execute(delete(Product).where(Product.id == product_id))
+        await _delete_user(sessions, user_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refund_of_delivered_order_does_not_restock_consumed_item() -> None:
+    engine, sessions = _database()
+    guild_id = 777002
+    async with sessions() as session, session.begin():
+        user = await get_or_create_user(session, _discord_id())
+        user_id = user.id
+        product = Product(
+            guild_id=guild_id,
+            name="Produto entregue",
+            slug=f"entregue-{uuid4().hex[:8]}",
+            product_type="digital",
+            price_credits=Decimal("12.00"),
+            stock_quantity=5,
+            active=True,
+        )
+        session.add(product)
+        await session.flush()
+        product_id = product.id
+        order = await create_product_order(
+            session,
+            guild_id=guild_id,
+            user_id=user_id,
+            product=product,
+        )
+        order.status = "delivered"
+        order.total_credits = Decimal("12.00")
+        user.total_spent = Decimal("12.00")
+        order_id = order.id
+
+    try:
+        async with sessions() as session, session.begin():
+            refunded = await refund_order(
+                session,
+                order_id=order_id,
+                reason="teste de item já entregue",
+            )
+            assert refunded.status == "refunded"
+
+        async with sessions() as session:
+            product = await session.get(Product, product_id)
+            assert product is not None
+            assert product.stock_quantity == 4
+    finally:
+        async with sessions() as session, session.begin():
+            await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
+            await session.execute(delete(Order).where(Order.id == order_id))
+            await session.execute(delete(Product).where(Product.id == product_id))
         await _delete_user(sessions, user_id)
         await engine.dispose()

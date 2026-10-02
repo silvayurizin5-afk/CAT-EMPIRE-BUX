@@ -8,12 +8,14 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_name: str = "NEXTBUY"
     discord_token: SecretStr = SecretStr("")
-    discord_guild_id: int | None = None
+    discord_guild_id: int | None = 1549240664149991424
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nextbuy"
 
     # Pagamento atual: PIX estático por pedido, confirmado manualmente pela equipe.
     pix_key: SecretStr = SecretStr("")
     pix_receiver_name: str = ""
+    pix_order_ttl_minutes: int = 20
+    pix_max_pending_orders_per_user: int = 2
 
     # IA: todos os provedores são opcionais. Um provedor só entra no fallback
     # quando chave e modelo estiverem configurados.

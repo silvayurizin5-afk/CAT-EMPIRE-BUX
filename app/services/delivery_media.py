@@ -11,9 +11,13 @@ import discord
 import httpx
 from PIL import Image, ImageSequence
 
+from app.core.network_security import PublicHTTPError, download_public_http_bytes
+
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _PREFERRED_DELIVERY_BYTES = 6 * 1024 * 1024
 _CACHE_SIZE = 8
+_MAX_IMAGE_PIXELS = 24_000_000
+_MAX_ANIMATION_FRAMES = 500
 _CACHE: OrderedDict[tuple[str, int], PreparedDeliveryMedia] = OrderedDict()
 
 
@@ -44,46 +48,39 @@ def validate_media_url(value: str | None) -> str:
     except ValueError as exc:
         raise DeliveryMediaError("URL de banner inválida.") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise DeliveryMediaError("O banner aceita qualquer URL HTTP/HTTPS válida.")
+        raise DeliveryMediaError("O banner exige uma URL HTTP/HTTPS válida.")
     return raw
 
 
 async def _download_media(url: str) -> bytes:
     timeout = httpx.Timeout(30.0, connect=10.0)
     headers = {"User-Agent": "NEXTBUY/1.0 DiscordBot"}
-    data = bytearray()
-
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
+        return await download_public_http_bytes(
+            url,
+            max_bytes=_MAX_DOWNLOAD_BYTES,
             timeout=timeout,
             headers=headers,
-        ) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    data.extend(chunk)
-                    if len(data) > _MAX_DOWNLOAD_BYTES:
-                        raise DeliveryMediaError(
-                            "A mídia ultrapassa 64 MB e não pode ser processada pelo bot."
-                        )
-    except httpx.HTTPError as exc:
-        raise DeliveryMediaError("Não consegui baixar a mídia dessa URL.") from exc
-
-    if not data:
-        raise DeliveryMediaError("A URL retornou um arquivo vazio.")
-    return bytes(data)
+        )
+    except PublicHTTPError as exc:
+        raise DeliveryMediaError(
+            "Não consegui baixar uma mídia pública válida dessa URL."
+        ) from exc
 
 
 def _open_image(data: bytes) -> Image.Image:
     try:
         image = Image.open(io.BytesIO(data))
         image.seek(0)
-        return image
     except (OSError, ValueError) as exc:
         raise DeliveryMediaError(
             "A URL não retornou uma imagem reconhecida. O bot tentará usá-la diretamente."
         ) from exc
+    if image.width * image.height > _MAX_IMAGE_PIXELS:
+        raise DeliveryMediaError("A imagem possui resolução excessiva.")
+    if int(getattr(image, "n_frames", 1) or 1) > _MAX_ANIMATION_FRAMES:
+        raise DeliveryMediaError("A animação possui quadros demais para processamento seguro.")
+    return image
 
 
 def _coalesced_frames(data: bytes) -> tuple[list[Image.Image], list[int], int]:

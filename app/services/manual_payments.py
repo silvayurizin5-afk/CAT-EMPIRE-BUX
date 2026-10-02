@@ -51,7 +51,7 @@ async def cancel_manual_pix_order(
     session: AsyncSession,
     *,
     order_id: UUID,
-    actor_discord_id: int,
+    actor_discord_id: int | None,
     reason: str = "manual",
 ) -> Order:
     order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())

@@ -2,9 +2,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.money import money, require_positive
 from app.db.models import FeedbackReminder, Order, OrderItem, Product, RobuxRate, User
 from app.services.audit import write_audit_log
@@ -20,6 +21,34 @@ class OutOfStockError(ValueError):
     pass
 
 
+class TooManyPendingOrdersError(ValueError):
+    pass
+
+
+async def _require_pending_order_capacity(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    user_id: int,
+) -> None:
+    user = await session.scalar(select(User).where(User.id == user_id).with_for_update())
+    if user is None:
+        raise ValueError("Usuário não encontrado")
+    limit = max(1, settings.pix_max_pending_orders_per_user)
+    pending = await session.scalar(
+        select(func.count(Order.id)).where(
+            Order.guild_id == guild_id,
+            Order.user_id == user_id,
+            Order.status == "pending",
+        )
+    )
+    if int(pending or 0) >= limit:
+        raise TooManyPendingOrdersError(
+            f"Você já possui {limit} pedido(s) aguardando pagamento. "
+            "Conclua ou cancele um deles antes de criar outro."
+        )
+
+
 async def create_product_order(
     session: AsyncSession,
     *,
@@ -30,6 +59,8 @@ async def create_product_order(
 ) -> Order:
     if quantity <= 0:
         raise ValueError("Quantidade inválida")
+
+    await _require_pending_order_capacity(session, guild_id=guild_id, user_id=user_id)
 
     locked_product = await session.scalar(
         select(Product).where(Product.id == product.id).with_for_update()
@@ -81,6 +112,8 @@ async def create_robux_order(
 ) -> Order:
     if robux <= 0 or robux > 1_000_000:
         raise ValueError("Quantidade de Robux inválida")
+
+    await _require_pending_order_capacity(session, guild_id=guild_id, user_id=user_id)
 
     locked_rate = await session.scalar(
         select(RobuxRate).where(RobuxRate.id == rate.id).with_for_update()
@@ -196,6 +229,7 @@ async def refund_order(session: AsyncSession, *, order_id: UUID, reason: str) ->
     )
     user.total_spent = max(money("0"), money(user.total_spent - order.total_credits))
 
+    was_delivered = order.status == "delivered"
     items = list(
         (
             await session.scalars(
@@ -209,7 +243,11 @@ async def refund_order(session: AsyncSession, *, order_id: UUID, reason: str) ->
         product = await session.scalar(
             select(Product).where(Product.id == item.product_id).with_for_update()
         )
-        if product is not None and product.stock_quantity is not None:
+        if (
+            not was_delivered
+            and product is not None
+            and product.stock_quantity is not None
+        ):
             product.stock_quantity += item.quantity
 
     reminder = await session.scalar(

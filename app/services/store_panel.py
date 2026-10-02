@@ -18,7 +18,7 @@ def normalize_coupon_code(value: str) -> str:
 def discounted_total(total: Decimal, discount_percent: Decimal) -> Decimal:
     base = money(total)
     percent = Decimal(discount_percent)
-    if percent <= 0 or percent > 100:
+    if percent <= 0 or percent >= 100:
         raise ValueError("Percentual de desconto inválido")
     discount = money(base * percent / Decimal("100"))
     return max(Decimal("0.00"), money(base - discount))
@@ -111,8 +111,8 @@ async def upsert_coupon(
     if not normalized:
         raise ValueError("Código do cupom é obrigatório")
     percent = money(discount_percent)
-    if percent <= 0 or percent > 100:
-        raise ValueError("O desconto deve ficar entre 0,01% e 100%")
+    if percent <= 0 or percent >= 100:
+        raise ValueError("O desconto deve ficar entre 0,01% e 99,99%")
     if max_uses is not None and max_uses <= 0:
         raise ValueError("O limite de usos deve ser maior que zero")
 

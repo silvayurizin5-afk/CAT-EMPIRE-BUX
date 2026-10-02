@@ -18,6 +18,8 @@ def test_coupon_code_is_normalized() -> None:
 def test_invalid_discount_is_rejected() -> None:
     with pytest.raises(ValueError):
         discounted_total(Decimal("10.00"), Decimal("0"))
+    with pytest.raises(ValueError):
+        discounted_total(Decimal("10.00"), Decimal("100"))
 
 
 def test_store_panel_defaults_are_single_embed_friendly() -> None:

@@ -86,7 +86,7 @@ class StoreCoupon(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("guild_id", "code", name="uq_store_coupon_guild_code"),
         CheckConstraint(
-            "discount_percent > 0 AND discount_percent <= 100",
+            "discount_percent > 0 AND discount_percent < 100",
             name="ck_store_coupon_discount_percent",
         ),
         CheckConstraint("max_uses IS NULL OR max_uses > 0", name="ck_store_coupon_max_uses"),
