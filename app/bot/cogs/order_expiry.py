@@ -59,7 +59,7 @@ class OrderExpiryCog(commands.Cog):
                     await cancel_manual_pix_order(
                         session,
                         order_id=current.id,
-                        actor_discord_id=0,
+                        actor_discord_id=None,
                         reason="expirado automaticamente por falta de pagamento",
                     )
             except ValueError:
