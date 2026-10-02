@@ -72,15 +72,15 @@ def _open_image(data: bytes) -> Image.Image:
     try:
         image = Image.open(io.BytesIO(data))
         image.seek(0)
-        if image.width * image.height > _MAX_IMAGE_PIXELS:
-            raise DeliveryMediaError("A imagem possui resolução excessiva.")
-        if int(getattr(image, "n_frames", 1) or 1) > _MAX_ANIMATION_FRAMES:
-            raise DeliveryMediaError("A animação possui quadros demais para processamento seguro.")
-        return image
     except (OSError, ValueError) as exc:
         raise DeliveryMediaError(
             "A URL não retornou uma imagem reconhecida. O bot tentará usá-la diretamente."
         ) from exc
+    if image.width * image.height > _MAX_IMAGE_PIXELS:
+        raise DeliveryMediaError("A imagem possui resolução excessiva.")
+    if int(getattr(image, "n_frames", 1) or 1) > _MAX_ANIMATION_FRAMES:
+        raise DeliveryMediaError("A animação possui quadros demais para processamento seguro.")
+    return image
 
 
 def _coalesced_frames(data: bytes) -> tuple[list[Image.Image], list[int], int]:
