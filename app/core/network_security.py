@@ -54,7 +54,10 @@ async def validate_public_http_url(url: str) -> str:
             raise PublicHTTPError("Endereços de rede privada/interna não são permitidos.")
         return parsed.geturl()
 
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise PublicHTTPError("A URL contém uma porta inválida.") from exc
     try:
         infos = await asyncio.to_thread(
             socket.getaddrinfo,
@@ -114,10 +117,11 @@ async def download_public_http_bytes(
                     raw_length = response.headers.get("content-length")
                     if raw_length:
                         try:
-                            if int(raw_length) > max_bytes:
-                                raise PublicHTTPError("O arquivo remoto excede o limite permitido.")
+                            content_length = int(raw_length)
                         except ValueError:
-                            pass
+                            content_length = None
+                        if content_length is not None and content_length > max_bytes:
+                            raise PublicHTTPError("O arquivo remoto excede o limite permitido.")
 
                     data = bytearray()
                     async for chunk in response.aiter_bytes():
