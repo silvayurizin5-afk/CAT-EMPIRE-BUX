@@ -103,7 +103,7 @@ class GameCatalogPanelConfig(Base, TimestampMixin):
             "Clique em **Abrir catálogo** para escolher um jogo e depois o produto."
         ),
     )
-    color: Mapped[int] = mapped_column(Integer, default=0x7B2CBF, server_default="8071871")
+    color: Mapped[int] = mapped_column(Integer, default=0x7B2CBF, server_default="8072383")
     image_url: Mapped[str | None] = mapped_column(Text)
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
     footer_text: Mapped[str] = mapped_column(
