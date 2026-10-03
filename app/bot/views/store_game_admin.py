@@ -27,9 +27,11 @@ def _http_url_or_none(value: str) -> str | None:
 async def _refresh_store(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
+    from app.bot.views.game_catalog import refresh_published_game_catalog_panel
     from app.bot.views.store_panel import refresh_published_store_panel
 
     await refresh_published_store_panel(interaction.guild)
+    await refresh_published_game_catalog_panel(interaction.guild)
 
 
 class ProductStoreDisplayModal(discord.ui.Modal):
