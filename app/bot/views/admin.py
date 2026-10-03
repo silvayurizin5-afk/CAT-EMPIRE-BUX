@@ -169,6 +169,11 @@ class ProductModal(discord.ui.Modal, title="Criar produto"):
             f"Produto **{product.name}** criado por {price_label}.",
             ephemeral=True,
         )
+        from app.bot.views.game_catalog import refresh_published_game_catalog_panel
+        from app.bot.views.store_panel import refresh_published_store_panel
+
+        await refresh_published_store_panel(interaction.guild)
+        await refresh_published_game_catalog_panel(interaction.guild)
 
 
 class RobuxRateModal(discord.ui.Modal, title="Configurar cotação de Robux"):
