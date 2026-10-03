@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from app.bot.views.game_catalog import restore_game_catalog_view
 from app.bot.views.manual_pix import TicketStaffContainerLayout, restore_manual_pix_views
 from app.bot.views.profile import LeaderboardView
 from app.bot.views.store_panel import restore_store_panel_views
@@ -75,6 +76,7 @@ class NextBuyBot(commands.Bot):
         await self.load_extension("app.bot.cogs.leaderboard_refresh")
         await self.load_extension("app.bot.cogs.order_expiry")
         self.add_view(LeaderboardView())
+        restore_game_catalog_view(self)
         await self._restore_ticket_views()
         await restore_manual_pix_views(self)
         await restore_store_panel_views(self)

@@ -102,9 +102,11 @@ def build_product_admin_embed(product: Product) -> discord.Embed:
 async def _refresh_store_if_needed(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
+    from app.bot.views.game_catalog import refresh_published_game_catalog_panel
     from app.bot.views.store_panel import refresh_published_store_panel
 
     await refresh_published_store_panel(interaction.guild)
+    await refresh_published_game_catalog_panel(interaction.guild)
 
 
 class ProductPresentationModal(discord.ui.Modal):

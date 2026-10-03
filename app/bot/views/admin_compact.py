@@ -5,6 +5,7 @@ from app.bot.views.admin_feedback import FeedbackSettingsModal
 from app.bot.views.admin_forms import ConfigTargetView, RankRoleView, TermsModal
 from app.bot.views.economy_admin import send_economy_management
 from app.bot.views.embed_builder import send_embed_builder
+from app.bot.views.game_catalog_admin import send_game_catalog_admin
 from app.bot.views.rank_admin import send_rank_tier_management
 from app.bot.views.store_panel_admin import send_store_panel_admin
 from app.bot.views.terms_admin import send_terms_management, send_terms_panel_settings
@@ -20,6 +21,11 @@ ADMIN_ACTIONS = (
         "store_panel",
         "Configurar loja",
         "Painel, produtos, cupons, preços, estoques e publicação",
+    ),
+    (
+        "game_catalog",
+        "Catálogo de jogos",
+        "Segundo painel com botão, jogos, visual e publicação própria",
     ),
     (
         "delivery",
@@ -121,6 +127,10 @@ class CompactAdminPanelView(discord.ui.LayoutView):
 
         if action == "store_panel":
             await send_store_panel_admin(interaction)
+            return
+
+        if action == "game_catalog":
+            await send_game_catalog_admin(interaction)
             return
 
         if action == "roles":

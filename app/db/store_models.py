@@ -72,6 +72,90 @@ class StorePanelConfig(Base, TimestampMixin):
     published_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+class GameCatalogPanelConfig(Base, TimestampMixin):
+    __tablename__ = "game_catalog_panel_configs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    title: Mapped[str] = mapped_column(
+        String(256),
+        default="NEXTBUY",
+        server_default="NEXTBUY",
+    )
+    status_text: Mapped[str] = mapped_column(
+        String(160),
+        default="Atendimento on-line",
+        server_default="Atendimento on-line",
+    )
+    status_emoji: Mapped[str] = mapped_column(
+        String(128),
+        default="🟢",
+        server_default="🟢",
+    )
+    description: Mapped[str] = mapped_column(
+        Text,
+        default=(
+            "Robux, Gamepasses, itens e produtos dos seus jogos favoritos em um só lugar.\n"
+            "Clique em **Abrir catálogo** para escolher um jogo e depois o produto."
+        ),
+        server_default=(
+            "Robux, Gamepasses, itens e produtos dos seus jogos favoritos em um só lugar.\n"
+            "Clique em **Abrir catálogo** para escolher um jogo e depois o produto."
+        ),
+    )
+    color: Mapped[int] = mapped_column(Integer, default=0x7B2CBF, server_default="8072383")
+    image_url: Mapped[str | None] = mapped_column(Text)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    footer_text: Mapped[str] = mapped_column(
+        String(2048),
+        default="{count} jogo(s) disponível(is) • NEXTBUY",
+        server_default="{count} jogo(s) disponível(is) • NEXTBUY",
+    )
+    open_button_label: Mapped[str] = mapped_column(
+        String(80),
+        default="Abrir catálogo",
+        server_default="Abrir catálogo",
+    )
+    open_button_emoji: Mapped[str] = mapped_column(
+        String(128),
+        default="🛒",
+        server_default="🛒",
+    )
+    open_button_style: Mapped[str] = mapped_column(
+        String(16),
+        default="success",
+        server_default="success",
+    )
+    catalog_title: Mapped[str] = mapped_column(
+        String(256),
+        default="NEXTBUY • Escolha seu jogo",
+        server_default="NEXTBUY • Escolha seu jogo",
+    )
+    catalog_description: Mapped[str] = mapped_column(
+        Text,
+        default="Escolha um jogo para ver seus produtos.",
+        server_default="Escolha um jogo para ver seus produtos.",
+    )
+    catalog_status_text: Mapped[str] = mapped_column(
+        String(160),
+        default="Atendimento: on-line.",
+        server_default="Atendimento: on-line.",
+    )
+    catalog_footer_text: Mapped[str] = mapped_column(
+        String(2048),
+        default="Jogos • Página 1/1",
+        server_default="Jogos • Página 1/1",
+    )
+    game_placeholder: Mapped[str] = mapped_column(
+        String(100),
+        default="Selecione um jogo",
+        server_default="Selecione um jogo",
+    )
+    selected_game_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    published_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    published_message_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
 class StoreCoupon(Base, TimestampMixin):
     __tablename__ = "store_coupons"
 
