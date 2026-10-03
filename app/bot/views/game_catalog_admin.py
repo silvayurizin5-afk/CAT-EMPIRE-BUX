@@ -356,7 +356,7 @@ class GameCatalogPublishSelect(discord.ui.ChannelSelect):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            message = await publish_game_catalog_panel(interaction, channel)
+            await publish_game_catalog_panel(interaction, channel)
         except discord.Forbidden:
             await interaction.edit_original_response(
                 content="O bot não tem permissão para publicar nesse canal.",
