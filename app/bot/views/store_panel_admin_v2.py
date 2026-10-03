@@ -8,7 +8,11 @@ from app.bot.views.store_panel import (
 from app.bot.views.store_panel_admin import STORE_PANEL_ACTIONS, StorePanelAdminView
 from app.db.session import SessionLocal
 from app.services.calculator import normalize_text
-from app.services.store_media import StoreBannerError, prepare_store_banner
+from app.services.store_media import (
+    StoreBannerError,
+    prepare_store_banner,
+    prepare_store_thumbnail,
+)
 from app.services.store_panel import get_or_create_store_panel, list_store_products
 
 
@@ -175,6 +179,21 @@ class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        prepared_thumbnail = None
+        if title_image_url:
+            try:
+                prepared_thumbnail = await prepare_store_thumbnail(
+                    title_image_url,
+                    upload_limit=interaction.guild.filesize_limit,
+                )
+            except StoreBannerError as exc:
+                await interaction.edit_original_response(
+                    content=f"Não consegui preparar essa thumbnail: {exc}",
+                    embed=None,
+                    view=StorePanelAdminViewV2(owner_id=interaction.user.id),
+                )
+                return
+
         prepared_banner = None
         if banner_url:
             try:
@@ -204,6 +223,13 @@ class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
             )
             embed = build_store_panel_embed(config, len(products), interaction.guild)
 
+        thumbnail_status = ""
+        if prepared_thumbnail is not None:
+            final_mb = len(prepared_thumbnail.data) / (1024 * 1024)
+            thumbnail_status = (
+                f" Thumbnail validada e anexada de forma estável (**{final_mb:.2f} MB**)."
+            )
+
         banner_status = ""
         if prepared_banner is not None:
             original_mb = prepared_banner.source_size / (1024 * 1024)
@@ -221,6 +247,7 @@ class StoreMediaModalV2(discord.ui.Modal, title="Imagens da loja"):
         await interaction.edit_original_response(
             content=(
                 "Imagens atualizadas: foto do título e banner são independentes."
+                + thumbnail_status
                 + banner_status
             ),
             embed=embed,

@@ -29,7 +29,9 @@ from app.services.store_media import (
     StoreBannerError,
     is_gif_banner_url,
     prepare_store_banner,
+    prepare_store_thumbnail,
     reusable_banner_attachment_url,
+    reusable_thumbnail_attachment_url,
 )
 from app.services.store_panel import (
     create_store_product_order,
@@ -120,6 +122,7 @@ def build_store_panel_card(
     *,
     guild: discord.Guild | None = None,
     banner_url: str | None = None,
+    thumbnail_url: str | None = None,
     timeout: float | None = None,
 ) -> "StorePanelLayout":
     return StorePanelLayout(
@@ -127,6 +130,7 @@ def build_store_panel_card(
         products=products,
         guild=guild,
         banner_url=banner_url,
+        thumbnail_url=thumbnail_url,
         timeout=timeout,
     )
 
@@ -534,6 +538,7 @@ class StorePanelLayout(discord.ui.LayoutView):
         products: list[Product],
         guild: discord.Guild | None = None,
         banner_url: str | None = None,
+        thumbnail_url: str | None = None,
         timeout: float | None = None,
     ) -> None:
         super().__init__(timeout=timeout)
@@ -554,7 +559,9 @@ class StorePanelLayout(discord.ui.LayoutView):
             footer=footer or None,
             accent_colour=0x7B2CBF,
             image_url=banner_url if banner_url is not None else config.image_url,
-            thumbnail_url=config.thumbnail_url,
+            thumbnail_url=(
+                thumbnail_url if thumbnail_url is not None else config.thumbnail_url
+            ),
             timeout=timeout,
         )
         self.container = card.container
@@ -579,6 +586,53 @@ async def _prepare_store_banner_for_guild(
         )
     except StoreBannerError:
         return None
+
+
+async def _prepare_store_thumbnail_for_guild(
+    config: StorePanelConfig,
+    guild: discord.Guild,
+) -> PreparedStoreBanner | None:
+    if not config.thumbnail_url:
+        return None
+    try:
+        return await prepare_store_thumbnail(
+            config.thumbnail_url,
+            upload_limit=guild.filesize_limit,
+        )
+    except StoreBannerError:
+        return None
+
+
+def _attachment_for_url(
+    attachment_url: str | None,
+    attachments: list[discord.Attachment] | tuple[discord.Attachment, ...],
+) -> discord.Attachment | None:
+    if not attachment_url or not attachment_url.startswith("attachment://"):
+        return None
+    filename = attachment_url.removeprefix("attachment://")
+    return next(
+        (attachment for attachment in attachments if attachment.filename == filename),
+        None,
+    )
+
+
+async def _resolve_store_thumbnail(
+    config: StorePanelConfig,
+    guild: discord.Guild,
+    attachments: list[discord.Attachment] | tuple[discord.Attachment, ...] = (),
+) -> tuple[str | None, PreparedStoreBanner | None, discord.Attachment | None]:
+    if not config.thumbnail_url:
+        return None, None, None
+
+    reused_url = reusable_thumbnail_attachment_url(config.thumbnail_url, attachments)
+    if reused_url is not None:
+        return reused_url, None, _attachment_for_url(reused_url, attachments)
+
+    prepared = await _prepare_store_thumbnail_for_guild(config, guild)
+    if prepared is None:
+        # Não envia uma URL quebrada ao Components V2.
+        return "", None, None
+    return prepared.attachment_url, prepared, None
 
 
 async def _apply_store_banner_async(
@@ -612,7 +666,6 @@ async def _apply_store_banner_async(
         if prepared is None:
             return
 
-        # Confere novamente se o banner configurado não mudou enquanto o GIF era processado.
         async with SessionLocal() as session:
             latest = await session.scalar(
                 select(StorePanelConfig).where(StorePanelConfig.guild_id == guild.id)
@@ -620,17 +673,30 @@ async def _apply_store_banner_async(
             if latest is None or latest.image_url != config.image_url:
                 return
 
+        thumbnail_url, prepared_thumbnail, reused_thumbnail = await _resolve_store_thumbnail(
+            config,
+            guild,
+            message.attachments,
+        )
         view = build_store_panel_card(
             config,
             products,
             guild=guild,
             banner_url=prepared.attachment_url,
+            thumbnail_url=thumbnail_url,
             timeout=None,
         )
+        attachments: list[discord.Attachment | discord.File] = []
+        if reused_thumbnail is not None:
+            attachments.append(reused_thumbnail)
+        elif prepared_thumbnail is not None:
+            attachments.append(prepared_thumbnail.to_file())
+        attachments.append(prepared.to_file())
+
         await message.edit(
             content=None,
             embeds=[],
-            attachments=[prepared.to_file()],
+            attachments=attachments,
             view=view,
         )
     except (discord.Forbidden, discord.HTTPException, StoreBannerError):
@@ -639,7 +705,6 @@ async def _apply_store_banner_async(
         current = _BANNER_TASKS.get(key)
         if current is asyncio.current_task():
             _BANNER_TASKS.pop(key, None)
-
 
 def _schedule_store_banner_update(
     guild: discord.Guild,
@@ -686,49 +751,59 @@ async def publish_store_panel(
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             existing_message = None
 
-    if existing_message is not None:
-        reused_url = reusable_banner_attachment_url(
-            config.image_url,
-            existing_message.attachments,
-        )
-        if reused_url is not None:
-            view = build_store_panel_card(
-                config,
-                products,
-                guild=guild,
-                banner_url=reused_url,
-                timeout=None,
-            )
-            await existing_message.edit(
-                content=None,
-                embeds=[],
-                attachments=list(existing_message.attachments),
-                view=view,
-            )
-            return existing_message
+    existing_attachments = existing_message.attachments if existing_message is not None else []
+    thumbnail_url, prepared_thumbnail, reused_thumbnail = await _resolve_store_thumbnail(
+        config,
+        guild,
+        existing_attachments,
+    )
 
-    # GIFs não bloqueiam mais a publicação: envia o painel primeiro e
-    # processa/anexa a mídia logo depois.
+    reused_banner_url = reusable_banner_attachment_url(
+        config.image_url,
+        existing_attachments,
+    )
     animated_banner = is_gif_banner_url(config.image_url)
-    immediate_banner_url = "" if animated_banner else config.image_url
+    immediate_banner_url = (
+        reused_banner_url
+        if reused_banner_url is not None
+        else ("" if animated_banner else config.image_url)
+    )
+
     view = build_store_panel_card(
         config,
         products,
         guild=guild,
         banner_url=immediate_banner_url,
+        thumbnail_url=thumbnail_url,
         timeout=None,
     )
+
+    attachments: list[discord.Attachment | discord.File] = []
+    if reused_thumbnail is not None:
+        attachments.append(reused_thumbnail)
+    elif prepared_thumbnail is not None:
+        attachments.append(prepared_thumbnail.to_file())
+
+    if reused_banner_url is not None:
+        reused_banner = _attachment_for_url(reused_banner_url, existing_attachments)
+        if reused_banner is not None:
+            attachments.append(reused_banner)
 
     if existing_message is not None:
         await existing_message.edit(
             content=None,
             embeds=[],
-            attachments=[],
+            attachments=attachments,
             view=view,
         )
         message = existing_message
     else:
-        message = await channel.send(view=view)
+        files = [
+            item
+            for item in attachments
+            if isinstance(item, discord.File)
+        ]
+        message = await channel.send(view=view, files=files)
 
     async with SessionLocal() as session, session.begin():
         saved = await get_or_create_store_panel(session, guild.id)
@@ -736,14 +811,13 @@ async def publish_store_panel(
         saved.published_message_id = message.id
         await session.flush()
 
-    if animated_banner:
+    if animated_banner and reused_banner_url is None:
         _schedule_store_banner_update(
             guild,
             channel_id=channel.id,
             message_id=message.id,
         )
     return message
-
 
 async def refresh_published_store_panel(guild: discord.Guild) -> bool:
     async with SessionLocal() as session, session.begin():
@@ -762,58 +836,56 @@ async def refresh_published_store_panel(guild: discord.Guild) -> bool:
 
     try:
         message = await channel.fetch_message(message_id)
+        existing_attachments = message.attachments
 
-        reused_url = reusable_banner_attachment_url(
+        thumbnail_url, prepared_thumbnail, reused_thumbnail = await _resolve_store_thumbnail(
+            config,
+            guild,
+            existing_attachments,
+        )
+        reused_banner_url = reusable_banner_attachment_url(
             config.image_url,
-            message.attachments,
+            existing_attachments,
         )
-        if reused_url is not None:
-            view = build_store_panel_card(
-                config,
-                products,
-                guild=guild,
-                banner_url=reused_url,
-                timeout=None,
-            )
-            await message.edit(
-                content=None,
-                embeds=[],
-                attachments=list(message.attachments),
-                view=view,
-            )
-            return True
 
-        prepared_banner = await _prepare_store_banner_for_guild(config, guild)
-        banner_url = (
-            prepared_banner.attachment_url
-            if prepared_banner is not None
-            else config.image_url
-        )
+        attachments: list[discord.Attachment | discord.File] = []
+        if reused_thumbnail is not None:
+            attachments.append(reused_thumbnail)
+        elif prepared_thumbnail is not None:
+            attachments.append(prepared_thumbnail.to_file())
+
+        if reused_banner_url is not None:
+            banner_url = reused_banner_url
+            reused_banner = _attachment_for_url(reused_banner_url, existing_attachments)
+            if reused_banner is not None:
+                attachments.append(reused_banner)
+        else:
+            prepared_banner = await _prepare_store_banner_for_guild(config, guild)
+            if prepared_banner is not None:
+                banner_url = prepared_banner.attachment_url
+                attachments.append(prepared_banner.to_file())
+            elif is_gif_banner_url(config.image_url):
+                banner_url = ""
+            else:
+                banner_url = config.image_url
+
         view = build_store_panel_card(
             config,
             products,
             guild=guild,
             banner_url=banner_url,
+            thumbnail_url=thumbnail_url,
             timeout=None,
         )
-        if prepared_banner is not None:
-            await message.edit(
-                content=None,
-                embeds=[],
-                attachments=[prepared_banner.to_file()],
-                view=view,
-            )
-        else:
-            await message.edit(
-                content=None,
-                embeds=[],
-                attachments=[],
-                view=view,
-            )
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        await message.edit(
+            content=None,
+            embeds=[],
+            attachments=attachments,
+            view=view,
+        )
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException, StoreBannerError):
         return False
     return True
-
 
 async def restore_store_panel_views(bot: discord.Client) -> None:
     async with SessionLocal() as session:
