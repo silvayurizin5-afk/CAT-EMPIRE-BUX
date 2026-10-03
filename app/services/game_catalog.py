@@ -4,9 +4,16 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.views.store_games import is_game_product
 from app.db.models import Product
 from app.db.store_models import GameCatalogPanelConfig
+
+
+_GAME_TYPES = {"game", "games", "jogo", "jogos"}
+
+
+def _is_game_product(product: Product) -> bool:
+    value = str(product.product_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return value in _GAME_TYPES
 
 
 async def get_or_create_game_catalog(
@@ -55,7 +62,7 @@ async def list_catalog_games(
             )
         ).all()
     )
-    games = [product for product in rows if is_game_product(product)]
+    games = [product for product in rows if _is_game_product(product)]
     selected_ids = [int(value) for value in (config.selected_game_ids or [])]
     if selected_ids:
         by_id = {product.id: product for product in games}
@@ -77,7 +84,7 @@ async def list_all_game_products(
             )
         ).all()
     )
-    return [product for product in rows if is_game_product(product)]
+    return [product for product in rows if _is_game_product(product)]
 
 
 async def save_catalog_game_selection(
@@ -98,7 +105,7 @@ async def save_catalog_game_selection(
                 )
             ).all()
         )
-        valid = {product.id for product in candidates if is_game_product(product)}
+        valid = {product.id for product in candidates if _is_game_product(product)}
         unique_ids = [value for value in unique_ids if value in valid]
     config.selected_game_ids = unique_ids
     await session.flush()
