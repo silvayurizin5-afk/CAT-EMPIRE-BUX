@@ -197,7 +197,10 @@ class GameCatalogOpenView(discord.ui.View):
             self.open_catalog.label = (config.open_button_label or "Abrir catálogo")[:80]
             self.open_catalog.style = _button_style(config.open_button_style)
             emoji = (config.open_button_emoji or "").strip()
-            self.open_catalog.emoji = emoji or None
+            try:
+                self.open_catalog.emoji = emoji or None
+            except (TypeError, ValueError):
+                self.open_catalog.emoji = None
 
     @discord.ui.button(
         label="Abrir catálogo",
