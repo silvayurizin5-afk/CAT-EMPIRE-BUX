@@ -31,7 +31,7 @@ def upgrade() -> None:
             ),
             nullable=False,
         ),
-        sa.Column("color", sa.Integer(), server_default=sa.text("8071871"), nullable=False),
+        sa.Column("color", sa.Integer(), server_default=sa.text("8072383"), nullable=False),
         sa.Column("image_url", sa.Text()),
         sa.Column("thumbnail_url", sa.Text()),
         sa.Column(
