@@ -15,14 +15,13 @@ from PIL import Image, ImageSequence
 from app.core.network_security import PublicHTTPError, download_public_http_bytes
 
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
-_PREFERRED_PANEL_BYTES = 3 * 1024 * 1024
-_PREFERRED_THUMBNAIL_BYTES = 2 * 1024 * 1024
 _CACHE_SIZE = 4
 _MAX_IMAGE_PIXELS = 24_000_000
 _MAX_ANIMATION_FRAMES = 500
 _MEDIA_CACHE_DIR = Path(".nextbuy_media_cache")
 _CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
 _THUMBNAIL_CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
+_PREPARE_LOCKS: dict[tuple[str, str, int], asyncio.Lock] = {}
 
 
 class StoreBannerError(ValueError):
@@ -338,94 +337,116 @@ async def prepare_store_banner(
 ) -> PreparedStoreBanner | None:
     """Prepara GIF da loja como attachment estável do Discord.
 
-    Imagens não-GIF continuam por URL e retornam None.
+    O arquivo original é preservado sempre que já cabe no limite real de
+    upload do servidor. A conversão só acontece quando ela é necessária.
     """
 
     if not _looks_like_gif(source_url):
         return None
 
     assert source_url is not None
-    # Mantém o banner pequeno mesmo quando o servidor aceita uploads maiores.
-    # Isso reduz bastante o tempo de publicação/edição do painel.
-    discord_cap = max(512 * 1024, int(upload_limit) - 256 * 1024)
-    target_bytes = min(_PREFERRED_PANEL_BYTES, discord_cap)
+    target_bytes = max(512 * 1024, int(upload_limit))
     cache_key = (source_url, target_bytes)
     cached = _CACHE.get(cache_key)
     if cached is not None:
         _CACHE.move_to_end(cache_key)
         return cached
 
-    raw = await _download_image(source_url)
-    _open_animated(raw)
+    lock = _PREPARE_LOCKS.setdefault(("banner", source_url, target_bytes), asyncio.Lock())
+    async with lock:
+        cached = _CACHE.get(cache_key)
+        if cached is not None:
+            _CACHE.move_to_end(cache_key)
+            return cached
 
-    prefix = banner_attachment_prefix(source_url)
+        raw = await _download_image(source_url)
+        _open_animated(raw)
+        prefix = banner_attachment_prefix(source_url)
 
-    if len(raw) <= target_bytes:
-        prepared = PreparedStoreBanner(
-            data=raw,
-            filename=f"{prefix}.gif",
-            optimized=False,
-            source_size=len(raw),
-        )
-    else:
-        encoded = await asyncio.to_thread(
-            _optimize_gif,
-            raw,
-            target_bytes=target_bytes,
-        )
-        prepared = PreparedStoreBanner(
-            data=encoded,
-            filename=f"{prefix}.webp",
-            optimized=True,
-            source_size=len(raw),
-        )
+        if len(raw) <= target_bytes:
+            prepared = PreparedStoreBanner(
+                data=raw,
+                filename=f"{prefix}.gif",
+                optimized=False,
+                source_size=len(raw),
+            )
+        else:
+            encoded = await asyncio.to_thread(
+                _optimize_gif,
+                raw,
+                target_bytes=target_bytes,
+            )
+            prepared = PreparedStoreBanner(
+                data=encoded,
+                filename=f"{prefix}.webp",
+                optimized=True,
+                source_size=len(raw),
+            )
 
-    _CACHE[cache_key] = prepared
-    _CACHE.move_to_end(cache_key)
-    while len(_CACHE) > _CACHE_SIZE:
-        _CACHE.popitem(last=False)
-    return prepared
+        _CACHE[cache_key] = prepared
+        _CACHE.move_to_end(cache_key)
+        while len(_CACHE) > _CACHE_SIZE:
+            _CACHE.popitem(last=False)
+        return prepared
+
 
 async def prepare_store_thumbnail(
     source_url: str | None,
     *,
     upload_limit: int,
 ) -> PreparedStoreBanner | None:
-    """Baixa e estabiliza a thumbnail como attachment do Discord."""
+    """Baixa e estabiliza a thumbnail como attachment do Discord.
+
+    A imagem original é mantida quando já cabe no limite do servidor.
+    """
 
     if not source_url:
         return None
 
-    discord_cap = max(512 * 1024, int(upload_limit) - 256 * 1024)
-    target_bytes = min(_PREFERRED_THUMBNAIL_BYTES, discord_cap)
+    target_bytes = max(512 * 1024, int(upload_limit))
     cache_key = (source_url, target_bytes)
     cached = _THUMBNAIL_CACHE.get(cache_key)
     if cached is not None:
         _THUMBNAIL_CACHE.move_to_end(cache_key)
         return cached
 
-    raw = await _download_image(source_url)
-    extension, animated = _inspect_image(raw)
-    prefix = thumbnail_attachment_prefix(source_url)
-    encoded = raw
-    optimized = False
+    lock = _PREPARE_LOCKS.setdefault(("thumbnail", source_url, target_bytes), asyncio.Lock())
+    async with lock:
+        cached = _THUMBNAIL_CACHE.get(cache_key)
+        if cached is not None:
+            _THUMBNAIL_CACHE.move_to_end(cache_key)
+            return cached
 
-    if extension is None or len(raw) > target_bytes:
-        if animated:
-            encoded = await asyncio.to_thread(_optimize_gif, raw, target_bytes=target_bytes)
-        else:
-            encoded = await asyncio.to_thread(_optimize_static, raw, target_bytes=target_bytes)
-        extension = "webp"
-        optimized = True
+        raw = await _download_image(source_url)
+        extension, animated = _inspect_image(raw)
+        prefix = thumbnail_attachment_prefix(source_url)
+        encoded = raw
+        optimized = False
 
-    prepared = PreparedStoreBanner(
-        data=encoded,
-        filename=f"{prefix}.{extension}",
-        optimized=optimized,
-        source_size=len(raw),
-    )
-    _THUMBNAIL_CACHE[cache_key] = prepared
-    _THUMBNAIL_CACHE.move_to_end(cache_key)
-    while len(_THUMBNAIL_CACHE) > _CACHE_SIZE:
-        _THUMBNAIL_CACHE.popitem(last=False)
-    return prepared
+        if extension is None or len(raw) > target_bytes:
+            if animated:
+                encoded = await asyncio.to_thread(
+                    _optimize_gif,
+                    raw,
+                    target_bytes=target_bytes,
+                )
+            else:
+                encoded = await asyncio.to_thread(
+                    _optimize_static,
+                    raw,
+                    target_bytes=target_bytes,
+                )
+            extension = "webp"
+            optimized = True
+
+        prepared = PreparedStoreBanner(
+            data=encoded,
+            filename=f"{prefix}.{extension}",
+            optimized=optimized,
+            source_size=len(raw),
+        )
+        _THUMBNAIL_CACHE[cache_key] = prepared
+        _THUMBNAIL_CACHE.move_to_end(cache_key)
+        while len(_THUMBNAIL_CACHE) > _CACHE_SIZE:
+            _THUMBNAIL_CACHE.popitem(last=False)
+        return prepared
