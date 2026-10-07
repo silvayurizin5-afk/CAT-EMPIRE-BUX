@@ -18,7 +18,7 @@ from app.core.guild_guard import STORE_GUILD_ID, is_store_guild
 from app.db.session import SessionLocal
 from app.services.ai_gateway import available_providers
 from app.services.branding import FIXED_BRAND_MEDIA_URLS
-from app.services.store_media import StoreBannerError, cache_store_media_source
+from app.services.store_media import cache_store_media_source
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
