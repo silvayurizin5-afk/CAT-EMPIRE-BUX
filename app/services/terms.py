@@ -48,7 +48,7 @@ async def list_active_terms_for_acceptance(
                     TermsDocument.guild_id == guild_id,
                     TermsDocument.active.is_(True),
                 )
-                .order_by(TermsDocument.title, TermsDocument.id)
+                .order_by(TermsDocument.id)
                 .limit(max(1, min(limit, 25)))
             )
         ).all()
