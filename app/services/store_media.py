@@ -5,7 +5,7 @@ import hashlib
 import io
 from collections import OrderedDict
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 import discord
@@ -20,6 +20,7 @@ _PREFERRED_THUMBNAIL_BYTES = 2 * 1024 * 1024
 _CACHE_SIZE = 4
 _MAX_IMAGE_PIXELS = 24_000_000
 _MAX_ANIMATION_FRAMES = 500
+_MEDIA_CACHE_DIR = Path(".nextbuy_media_cache")
 _CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
 _THUMBNAIL_CACHE: OrderedDict[tuple[str, int], PreparedStoreBanner] = OrderedDict()
 
@@ -93,11 +94,50 @@ def _looks_like_gif(url: str | None) -> bool:
     return path.suffix.casefold() == ".gif"
 
 
+def _persistent_media_cache_path(url: str) -> Path:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return _MEDIA_CACHE_DIR / f"{digest}.bin"
+
+
+async def _read_persistent_media_cache(url: str) -> bytes | None:
+    path = _persistent_media_cache_path(url)
+    try:
+        if not path.is_file():
+            return None
+        data = await asyncio.to_thread(path.read_bytes)
+    except OSError:
+        return None
+    if not data or len(data) > _MAX_DOWNLOAD_BYTES:
+        return None
+    return data
+
+
+async def _write_persistent_media_cache(url: str, data: bytes) -> None:
+    path = _persistent_media_cache_path(url)
+    temporary = path.with_suffix(".tmp")
+
+    def write() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_bytes(data)
+        temporary.replace(path)
+
+    try:
+        await asyncio.to_thread(write)
+    except OSError:
+        # O cache em disco é uma otimização de durabilidade; falhar nele não
+        # deve impedir o envio da mídia que acabou de ser baixada.
+        return
+
+
 async def _download_image(url: str) -> bytes:
+    cached = await _read_persistent_media_cache(url)
+    if cached is not None:
+        return cached
+
     timeout = httpx.Timeout(25.0, connect=10.0)
     headers = {"User-Agent": "NEXTBUY/1.0 DiscordBot"}
     try:
-        return await download_public_http_bytes(
+        data = await download_public_http_bytes(
             url,
             max_bytes=_MAX_DOWNLOAD_BYTES,
             timeout=timeout,
@@ -105,9 +145,17 @@ async def _download_image(url: str) -> bytes:
             require_content_type_prefix="image/",
         )
     except PublicHTTPError as exc:
+        # Links assinados do Discord expiram. Se a mídia já foi capturada em
+        # uma execução anterior, o cache persistente mantém o visual funcional.
+        cached = await _read_persistent_media_cache(url)
+        if cached is not None:
+            return cached
         raise StoreBannerError(
             "Não consegui baixar um banner público válido pela URL informada."
         ) from exc
+
+    await _write_persistent_media_cache(url, data)
+    return data
 
 
 def _open_animated(data: bytes) -> Image.Image:
@@ -196,6 +244,14 @@ def _inspect_image(data: bytes) -> tuple[str | None, bool]:
         "GIF": "gif",
     }
     return extensions.get(image_format), animated
+
+
+async def cache_store_media_source(source_url: str) -> int:
+    """Capture a public image into the persistent cache and validate it."""
+
+    raw = await _download_image(source_url)
+    await asyncio.to_thread(_inspect_image, raw)
+    return len(raw)
 
 
 def _render_static_webp(data: bytes, *, scale: float, quality: int) -> bytes:

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.money import money
 from app.db.models import OrderItem, Product, RobuxRate
 from app.db.store_models import StoreCoupon, StorePanelConfig
+from app.services.branding import BRAND_THUMBNAIL_URL, STORE_CATALOG_BANNER_URL
 from app.services.catalog import list_active_products
 from app.services.orders import create_product_order, create_robux_order
 
@@ -29,7 +30,12 @@ async def get_or_create_store_panel(
 ) -> StorePanelConfig:
     statement = (
         insert(StorePanelConfig)
-        .values(guild_id=guild_id, selected_product_ids=[])
+        .values(
+            guild_id=guild_id,
+            selected_product_ids=[],
+            image_url=STORE_CATALOG_BANNER_URL,
+            thumbnail_url=BRAND_THUMBNAIL_URL,
+        )
         .on_conflict_do_nothing(index_elements=[StorePanelConfig.guild_id])
         .returning(StorePanelConfig.id)
     )

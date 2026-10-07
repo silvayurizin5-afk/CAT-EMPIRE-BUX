@@ -9,6 +9,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db.ticket_models import SupportTicket, TicketSettings
+from app.services.branding import SUPPORT_BANNER_URL
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,7 @@ class SupportOptions:
     button_emoji: str = "🎫"
     welcome: str = "{customer}, descreva sua dúvida. Nossa equipe vai atender você por aqui."
     color: str = "5865F2"
-    banner_url: str = ""
+    banner_url: str = SUPPORT_BANNER_URL
     max_open: int = 1
     cooldown_seconds: int = 60
     transcript_required: bool = True

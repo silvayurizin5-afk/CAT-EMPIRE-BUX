@@ -12,6 +12,13 @@ from app.db.models import Product
 from app.db.session import SessionLocal
 from app.db.store_models import GameCatalogPanelConfig
 from app.services.game_catalog import get_or_create_game_catalog, list_catalog_games
+from app.services.store_media import (
+    StoreBannerError,
+    prepare_store_banner,
+    prepare_store_thumbnail,
+    reusable_banner_attachment_url,
+    reusable_thumbnail_attachment_url,
+)
 
 
 def _button_style(value: str) -> discord.ButtonStyle:
@@ -33,6 +40,9 @@ def _format_footer(template: str, count: int) -> str:
 def build_game_catalog_embed(
     config: GameCatalogPanelConfig,
     game_count: int,
+    *,
+    image_url: str | None = None,
+    thumbnail_url: str | None = None,
 ) -> discord.Embed:
     status_line = " ".join(
         value
@@ -49,10 +59,14 @@ def build_game_catalog_embed(
         description=description or None,
         color=config.color,
     )
-    if config.image_url:
-        embed.set_image(url=config.image_url)
-    if config.thumbnail_url:
-        embed.set_thumbnail(url=config.thumbnail_url)
+    effective_image_url = image_url if image_url is not None else config.image_url
+    effective_thumbnail_url = (
+        thumbnail_url if thumbnail_url is not None else config.thumbnail_url
+    )
+    if effective_image_url:
+        embed.set_image(url=effective_image_url)
+    if effective_thumbnail_url:
+        embed.set_thumbnail(url=effective_thumbnail_url)
     footer = _format_footer(config.footer_text, game_count).strip()
     if footer:
         embed.set_footer(text=footer[:2048])
@@ -234,6 +248,76 @@ class GameCatalogOpenView(discord.ui.View):
         )
 
 
+def _attachment_for_url(
+    attachment_url: str | None,
+    attachments: list[discord.Attachment] | tuple[discord.Attachment, ...],
+) -> discord.Attachment | None:
+    if not attachment_url or not attachment_url.startswith("attachment://"):
+        return None
+    filename = attachment_url.removeprefix("attachment://")
+    return next(
+        (attachment for attachment in attachments if attachment.filename == filename),
+        None,
+    )
+
+
+async def _prepare_game_catalog_media(
+    config: GameCatalogPanelConfig,
+    guild: discord.Guild,
+    existing_attachments: list[discord.Attachment] | tuple[discord.Attachment, ...] = (),
+) -> tuple[str | None, str | None, list[discord.Attachment | discord.File]]:
+    attachments: list[discord.Attachment | discord.File] = []
+
+    image_url = config.image_url
+    reused_banner_url = reusable_banner_attachment_url(
+        config.image_url,
+        existing_attachments,
+    )
+    if reused_banner_url is not None:
+        image_url = reused_banner_url
+        reused_banner = _attachment_for_url(reused_banner_url, existing_attachments)
+        if reused_banner is not None:
+            attachments.append(reused_banner)
+    elif config.image_url:
+        try:
+            prepared_banner = await prepare_store_banner(
+                config.image_url,
+                upload_limit=guild.filesize_limit,
+            )
+        except StoreBannerError:
+            prepared_banner = None
+        if prepared_banner is not None:
+            image_url = prepared_banner.attachment_url
+            attachments.append(prepared_banner.to_file())
+
+    thumbnail_url = config.thumbnail_url
+    reused_thumbnail_url = reusable_thumbnail_attachment_url(
+        config.thumbnail_url,
+        existing_attachments,
+    )
+    if reused_thumbnail_url is not None:
+        thumbnail_url = reused_thumbnail_url
+        reused_thumbnail = _attachment_for_url(
+            reused_thumbnail_url,
+            existing_attachments,
+        )
+        if reused_thumbnail is not None:
+            attachments.append(reused_thumbnail)
+    elif config.thumbnail_url:
+        try:
+            prepared_thumbnail = await prepare_store_thumbnail(
+                config.thumbnail_url,
+                upload_limit=guild.filesize_limit,
+            )
+        except StoreBannerError:
+            prepared_thumbnail = None
+        if prepared_thumbnail is not None:
+            thumbnail_url = prepared_thumbnail.attachment_url
+            attachments.append(prepared_thumbnail.to_file())
+
+    return image_url, thumbnail_url, attachments
+
+
 async def publish_game_catalog_panel(
     interaction: discord.Interaction,
     channel: discord.TextChannel,
@@ -251,19 +335,40 @@ async def publish_game_catalog_panel(
         previous_channel_id = config.published_channel_id
         previous_message_id = config.published_message_id
 
-    embed = build_game_catalog_embed(config, len(games))
     view = GameCatalogOpenView(config)
     message: discord.Message | None = None
 
     if previous_channel_id == channel.id and previous_message_id:
         try:
             message = await channel.fetch_message(previous_message_id)
-            await message.edit(embed=embed, view=view)
+            image_url, thumbnail_url, attachments = await _prepare_game_catalog_media(
+                config,
+                interaction.guild,
+                message.attachments,
+            )
+            embed = build_game_catalog_embed(
+                config,
+                len(games),
+                image_url=image_url,
+                thumbnail_url=thumbnail_url,
+            )
+            await message.edit(embed=embed, attachments=attachments, view=view)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             message = None
 
     if message is None:
-        message = await channel.send(embed=embed, view=view)
+        image_url, thumbnail_url, attachments = await _prepare_game_catalog_media(
+            config,
+            interaction.guild,
+        )
+        embed = build_game_catalog_embed(
+            config,
+            len(games),
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
+        )
+        files = [item for item in attachments if isinstance(item, discord.File)]
+        message = await channel.send(embed=embed, files=files, view=view)
 
     if (
         previous_channel_id
@@ -300,8 +405,19 @@ async def refresh_published_game_catalog_panel(guild: discord.Guild) -> None:
         return
     try:
         message = await channel.fetch_message(message_id)
+        image_url, thumbnail_url, attachments = await _prepare_game_catalog_media(
+            config,
+            guild,
+            message.attachments,
+        )
         await message.edit(
-            embed=build_game_catalog_embed(config, len(games)),
+            embed=build_game_catalog_embed(
+                config,
+                len(games),
+                image_url=image_url,
+                thumbnail_url=thumbnail_url,
+            ),
+            attachments=attachments,
             view=GameCatalogOpenView(config),
         )
     except discord.NotFound:

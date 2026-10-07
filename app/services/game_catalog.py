@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Product
 from app.db.store_models import GameCatalogPanelConfig
+from app.services.branding import BRAND_THUMBNAIL_URL, STORE_CATALOG_BANNER_URL
 
 
 _GAME_TYPES = {"game", "games", "jogo", "jogos"}
@@ -22,7 +23,12 @@ async def get_or_create_game_catalog(
 ) -> GameCatalogPanelConfig:
     statement = (
         insert(GameCatalogPanelConfig)
-        .values(guild_id=guild_id, selected_game_ids=[])
+        .values(
+            guild_id=guild_id,
+            selected_game_ids=[],
+            image_url=STORE_CATALOG_BANNER_URL,
+            thumbnail_url=BRAND_THUMBNAIL_URL,
+        )
         .on_conflict_do_nothing(index_elements=[GameCatalogPanelConfig.guild_id])
         .returning(GameCatalogPanelConfig.id)
     )
