@@ -9,6 +9,7 @@ from app.bot.components_v2 import CardLayout, add_action_row, add_select_row
 from app.bot.workflows.support import open_support_ticket, operate_ticket
 from app.db.session import SessionLocal
 from app.db.ticket_models import SupportTicket
+from app.services.branding import BRAND_THUMBNAIL_URL
 from app.services.support_tickets import SupportOptions
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,19 @@ class OpenSupportModal(discord.ui.Modal, title="Abrir atendimento"):
 
 
 class SupportPanel(CardLayout):
-    def __init__(self, options: SupportOptions | None = None):
+    def __init__(
+        self,
+        options: SupportOptions | None = None,
+        *,
+        banner_url: str | None = None,
+        thumbnail_url: str | None = None,
+    ):
         options = options or SupportOptions()
         super().__init__(
             title=options.panel_title,
             description=options.panel_description,
-            image_url=options.banner_url or None,
+            image_url=banner_url if banner_url is not None else (options.banner_url or None),
+            thumbnail_url=thumbnail_url if thumbnail_url is not None else BRAND_THUMBNAIL_URL,
             accent_colour=0x7B2CBF,
             timeout=None,
         )
