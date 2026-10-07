@@ -246,6 +246,14 @@ def _inspect_image(data: bytes) -> tuple[str | None, bool]:
     return extensions.get(image_format), animated
 
 
+async def cache_store_media_source(source_url: str) -> int:
+    """Capture a public image into the persistent cache and validate it."""
+
+    raw = await _download_image(source_url)
+    await asyncio.to_thread(_inspect_image, raw)
+    return len(raw)
+
+
 def _render_static_webp(data: bytes, *, scale: float, quality: int) -> bytes:
     try:
         with Image.open(io.BytesIO(data)) as image:
