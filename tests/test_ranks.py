@@ -25,3 +25,8 @@ def test_choose_highest_eligible_rank() -> None:
 def test_no_rank_when_below_first_threshold() -> None:
     tiers = [tier("Bronze", "10", 1)]
     assert choose_rank_tier(tiers, Decimal("5")) is None
+
+
+def test_zero_economy_has_no_rank_even_with_zero_threshold() -> None:
+    tiers = [tier("Inicial", "0", 1), tier("Bronze", "10", 2)]
+    assert choose_rank_tier(tiers, Decimal("0")) is None
