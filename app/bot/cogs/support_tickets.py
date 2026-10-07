@@ -19,6 +19,8 @@ from app.db.models import GuildConfig
 from app.db.session import SessionLocal
 from app.db.ticket_models import SupportTicket
 from app.services.audit import write_audit_log
+from app.services.branding import BRAND_THUMBNAIL_URL
+from app.services.store_media import prepare_store_banner, prepare_store_thumbnail
 from app.services.support_tickets import get_support_options
 
 
@@ -66,8 +68,32 @@ class SupportTicketsCog(commands.Cog):
                     raise ValueError("Configure o canal de transcripts antes de publicar.")
                 if not config.logs_channel_id:
                     raise ValueError("Configure o canal de logs antes de publicar.")
+            prepared_banner = await prepare_store_banner(
+                options.banner_url,
+                upload_limit=interaction.guild.filesize_limit,
+            )
+            prepared_thumbnail = await prepare_store_thumbnail(
+                BRAND_THUMBNAIL_URL,
+                upload_limit=interaction.guild.filesize_limit,
+            )
+            files: list[discord.File] = []
+            banner_url = options.banner_url or None
+            thumbnail_url = BRAND_THUMBNAIL_URL
+            if prepared_banner is not None:
+                files.append(prepared_banner.to_file())
+                banner_url = prepared_banner.attachment_url
+            if prepared_thumbnail is not None:
+                files.append(prepared_thumbnail.to_file())
+                thumbnail_url = prepared_thumbnail.attachment_url
+
             message = await channel.send(
-                view=SupportPanel(options), allowed_mentions=discord.AllowedMentions.none()
+                view=SupportPanel(
+                    options,
+                    banner_url=banner_url,
+                    thumbnail_url=thumbnail_url,
+                ),
+                files=files,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             async with SessionLocal() as session, session.begin():
                 await write_audit_log(
