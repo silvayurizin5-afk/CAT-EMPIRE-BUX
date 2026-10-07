@@ -16,6 +16,7 @@ from app.bot.workflows.feedback_permissions import (
 from app.core.config import settings
 from app.core.guild_guard import STORE_GUILD_ID, is_store_guild
 from app.db.session import SessionLocal
+from app.core.single_instance import acquire_single_instance_lock, release_single_instance_lock
 from app.services.ai_gateway import available_providers, close_ai_client
 from app.services.branding import FIXED_BRAND_MEDIA_URLS
 from app.services.store_media import cache_store_media_source
@@ -194,7 +195,12 @@ def run() -> None:
     token = settings.discord_token.get_secret_value()
     if not token:
         raise RuntimeError("DISCORD_TOKEN não configurado")
-    bot.run(token)
+
+    acquire_single_instance_lock()
+    try:
+        bot.run(token)
+    finally:
+        release_single_instance_lock()
 
 
 if __name__ == "__main__":
