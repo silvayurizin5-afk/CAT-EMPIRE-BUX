@@ -5,7 +5,6 @@ from uuid import UUID
 import discord
 
 from app.bot.views.profile import build_profile_embed
-from app.bot.views.terms_gate import require_current_terms
 from app.bot.workflows.leaderboard import refresh_leaderboard
 from app.bot.workflows.ranks import sync_customer_roles
 from app.bot.workflows.tickets import open_order_ticket
@@ -106,8 +105,6 @@ class ConfirmPurchaseView(discord.ui.View):
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        if not await require_current_terms(interaction, resume_view=self):
-            return
 
         async with self._lock:
             if self._order_id is not None:
@@ -179,8 +176,6 @@ class ConfirmRobuxPurchaseView(discord.ui.View):
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        if not await require_current_terms(interaction, resume_view=self):
-            return
 
         async with self._lock:
             if self._order_id is not None:
