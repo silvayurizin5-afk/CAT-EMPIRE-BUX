@@ -15,7 +15,6 @@ from app.bot.views.store_games import (
     list_game_subpanel_products,
     product_store_option_description,
 )
-from app.bot.views.terms_gate import require_current_terms
 from app.core.money import money
 from app.db.models import Product
 from app.db.session import SessionLocal
@@ -346,8 +345,6 @@ class ConfiguredProductCheckoutLayout(discord.ui.LayoutView):
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        if not await require_current_terms(interaction, resume_view=self):
-            return
 
         try:
             validate_pix_config()
