@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlparse
 
 import discord
@@ -14,8 +15,16 @@ from app.bot.emoji import (
 from app.db.models import GuildConfig, TermsDocument
 from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
+from app.services.branding import BRAND_THUMBNAIL_URL, TERMS_BANNER_URL
 from app.services.configs import get_or_create_guild_config
+from app.services.store_media import (
+    StoreBannerError,
+    prepare_store_banner,
+    prepare_store_thumbnail,
+)
 from app.services.terms import list_active_terms_for_acceptance
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_http_url(value: str | None) -> str | None:
@@ -133,6 +142,9 @@ class PublicTermsPanelView(discord.ui.LayoutView):
         terms: list[TermsDocument],
         guild: discord.Guild,
         config: GuildConfig,
+        *,
+        thumbnail_url: str | None = None,
+        banner_url: str | None = None,
     ) -> None:
         super().__init__(timeout=None)
         panel_emoji = emoji_display_value(config.terms_panel_emoji, guild)
@@ -144,20 +156,30 @@ class PublicTermsPanelView(discord.ui.LayoutView):
         header = f"## {prefix}{config.terms_panel_title}\n{description}"
 
         children: list[discord.ui.Item] = []
-        thumbnail_url = safe_http_url(config.terms_panel_thumbnail_url)
-        if thumbnail_url:
+        effective_thumbnail_url = (
+            thumbnail_url
+            if thumbnail_url is not None
+            else safe_http_url(config.terms_panel_thumbnail_url)
+        )
+        if effective_thumbnail_url:
             children.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(header),
-                    accessory=discord.ui.Thumbnail(thumbnail_url),
+                    accessory=discord.ui.Thumbnail(effective_thumbnail_url),
                 )
             )
         else:
             children.append(discord.ui.TextDisplay(header))
 
-        banner_url = safe_http_url(config.terms_panel_banner_url)
-        if banner_url:
-            children.append(discord.ui.MediaGallery(discord.MediaGalleryItem(banner_url)))
+        effective_banner_url = (
+            banner_url
+            if banner_url is not None
+            else safe_http_url(config.terms_panel_banner_url)
+        )
+        if effective_banner_url:
+            children.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(effective_banner_url))
+            )
 
         children.append(discord.ui.Separator())
         children.append(
@@ -168,6 +190,42 @@ class PublicTermsPanelView(discord.ui.LayoutView):
         children.append(discord.ui.ActionRow(PublicTermsSelect(terms, guild)))
         self.container = discord.ui.Container(*children, accent_colour=DEFAULT_ACCENT)
         self.add_item(self.container)
+
+
+async def _prepare_terms_panel_media(
+    guild: discord.Guild,
+) -> tuple[str | None, str | None, list[discord.File]]:
+    thumbnail_source = BRAND_THUMBNAIL_URL
+    banner_source = TERMS_BANNER_URL
+    files: list[discord.File] = []
+
+    thumbnail_url = safe_http_url(thumbnail_source)
+    try:
+        prepared_thumbnail = await prepare_store_thumbnail(
+            thumbnail_source,
+            upload_limit=guild.filesize_limit,
+        )
+    except StoreBannerError as exc:
+        logger.warning("Falha ao preparar thumbnail dos termos: %s", exc)
+    else:
+        if prepared_thumbnail is not None:
+            files.append(prepared_thumbnail.to_file())
+            thumbnail_url = prepared_thumbnail.attachment_url
+
+    banner_url = safe_http_url(banner_source)
+    try:
+        prepared_banner = await prepare_store_banner(
+            banner_source,
+            upload_limit=guild.filesize_limit,
+        )
+    except StoreBannerError as exc:
+        logger.warning("Falha ao preparar banner dos termos: %s", exc)
+    else:
+        if prepared_banner is not None:
+            files.append(prepared_banner.to_file())
+            banner_url = prepared_banner.attachment_url
+
+    return thumbnail_url, banner_url, files
 
 
 async def publish_terms_panel(interaction: discord.Interaction) -> None:
@@ -190,7 +248,16 @@ async def publish_terms_panel(interaction: discord.Interaction) -> None:
         )
         return
 
-    view = PublicTermsPanelView(terms, interaction.guild, config)
+    thumbnail_url, banner_url, files = await _prepare_terms_panel_media(
+        interaction.guild,
+    )
+    view = PublicTermsPanelView(
+        terms,
+        interaction.guild,
+        config,
+        thumbnail_url=thumbnail_url,
+        banner_url=banner_url,
+    )
     message = None
     if (
         config.terms_channel_id == interaction.channel.id
@@ -199,12 +266,17 @@ async def publish_terms_panel(interaction: discord.Interaction) -> None:
     ):
         try:
             message = await interaction.channel.fetch_message(config.terms_message_id)
-            await message.edit(content=None, embeds=[], view=view)
+            await message.edit(
+                content=None,
+                embeds=[],
+                attachments=files,
+                view=view,
+            )
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             message = None
 
     if message is None:
-        message = await interaction.channel.send(view=view)
+        message = await interaction.channel.send(view=view, files=files)
 
     async with SessionLocal() as session, session.begin():
         current = await get_or_create_guild_config(session, interaction.guild.id)
