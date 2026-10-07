@@ -4,6 +4,7 @@ import re
 from decimal import Decimal
 from typing import Any
 
+from app.services.branding import DELIVERY_BANNER_URL
 from app.services.calculator import format_brl
 from app.services.delivery_media import DeliveryMediaError, validate_media_url
 
@@ -90,7 +91,7 @@ DEFAULT_DELIVERY_CONFIG: dict[str, object] = {
     "banner_source": "url",
     "banner_mode": "animated",
     "banner_normalize_animation": True,
-    "banner_url": "https://i.imgur.com/foJHkif.gif",
+    "banner_url": DELIVERY_BANNER_URL,
     "delivery_emoji": VERIFY_EMOJI,
     "arrow_emoji": ARROW_EMOJI,
     "user_emoji": MEMBER_EMOJI,
