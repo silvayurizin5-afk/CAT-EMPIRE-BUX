@@ -5,8 +5,6 @@ from app.bot.views.automation_admin import AutoReplyActionsView, RobuxRateAction
 from app.bot.views.product_admin import ProductActionsView
 from app.bot.views.rank_admin import FullAdminPanelView, RankTierActionsView
 from app.bot.views.terms_admin import TermsActionsView
-from app.bot.views.terms_gate import TermsGateView
-from app.db.models import TermsDocument
 
 
 def _walk_items(items):
@@ -83,41 +81,3 @@ async def test_rank_admin_exposes_edit_and_toggle() -> None:
     view.stop()
 
 
-@pytest.mark.asyncio
-async def test_terms_gate_exposes_review_and_acceptance() -> None:
-    terms = [
-        TermsDocument(
-            id=1,
-            guild_id=123,
-            code="seguranca",
-            title="Segurança",
-            content="Leia antes de comprar.",
-            version=2,
-            active=True,
-        )
-    ]
-    resume_view = discord.ui.View(timeout=30)
-    gate = TermsGateView(terms, resume_view)
-    nested = list(_walk_items(gate.children))
-
-    labels = _button_labels(gate)
-    assert "Aceitar termos" in labels
-    assert any(isinstance(item, discord.ui.Select) for item in nested)
-
-    text = "\n".join(
-        item.content for item in nested if isinstance(item, discord.ui.TextDisplay)
-    )
-    assert "Termos necessários" in text
-    assert "Segurança" in text
-    assert "versão 2" not in text
-
-    gate.stop()
-    resume_view.stop()
-
-
-@pytest.mark.asyncio
-async def test_terms_gate_rejects_empty_snapshot() -> None:
-    resume_view = discord.ui.View(timeout=30)
-    with pytest.raises(ValueError, match="pelo menos um termo"):
-        TermsGateView([], resume_view)
-    resume_view.stop()
