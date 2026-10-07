@@ -16,7 +16,7 @@ from app.bot.workflows.feedback_permissions import (
 from app.core.config import settings
 from app.core.guild_guard import STORE_GUILD_ID, is_store_guild
 from app.db.session import SessionLocal
-from app.services.ai_gateway import available_providers
+from app.services.ai_gateway import available_providers, close_ai_client
 from app.services.branding import FIXED_BRAND_MEDIA_URLS
 from app.services.store_media import cache_store_media_source
 
@@ -66,7 +66,8 @@ class NextBuyBot(commands.Bot):
         for order_id in order_ids:
             self.add_view(TicketStaffContainerLayout(order_id))
 
-    async def setup_hook(self) -> None:
+    async def _warm_brand_media(self) -> None:
+        await self.wait_until_ready()
         results = await asyncio.gather(
             *(cache_store_media_source(url) for url in FIXED_BRAND_MEDIA_URLS),
             return_exceptions=True,
@@ -76,6 +77,16 @@ class NextBuyBot(commands.Bot):
                 logger.warning("Falha ao fixar mídia visual %s: %s", url, result)
             else:
                 logger.info("Mídia visual fixada no cache local: %.2f MB", result / (1024 * 1024))
+
+    async def close(self) -> None:
+        await close_ai_client()
+        await super().close()
+
+    async def setup_hook(self) -> None:
+        asyncio.create_task(
+            self._warm_brand_media(),
+            name="nextbuy-warm-brand-media",
+        )
 
         await self.load_extension("app.bot.cogs.admin")
         await self.load_extension("app.bot.cogs.staff")
