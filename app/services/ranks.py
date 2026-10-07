@@ -90,7 +90,10 @@ async def upsert_rank_tier(
 
 
 def choose_rank_tier(tiers: list[RankTier], total_spent: Decimal) -> RankTier | None:
-    eligible = [tier for tier in tiers if money(tier.min_spend) <= money(total_spent)]
+    spent = money(total_spent)
+    if spent <= 0:
+        return None
+    eligible = [tier for tier in tiers if money(tier.min_spend) <= spent]
     if not eligible:
         return None
     return max(eligible, key=lambda tier: (money(tier.min_spend), tier.id))
