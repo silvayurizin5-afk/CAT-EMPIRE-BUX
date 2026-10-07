@@ -21,8 +21,16 @@ STORE_CATALOG_BANNER_URL = (
     "hm=216ea06f0aa68842eda261646e65af93816b732e55f9b1c67de7f61267a944d0&"
 )
 
+DELIVERY_BANNER_URL = (
+    "https://cdn.discordapp.com/attachments/1549245593908678769/"
+    "1557289254088876163/nextbuy-entrega-ezgif.com-optimize.gif"
+    "?backend=b2&ex=6ac74223&is=6ac5f0a3&"
+    "hm=a6bd3ce6b3d1b20d739d36c9130b8c8eef3bec33f1a82d5c1af9ba29407a6464&"
+)
+
 FIXED_BRAND_MEDIA_URLS = (
     SUPPORT_BANNER_URL,
     BRAND_THUMBNAIL_URL,
     STORE_CATALOG_BANNER_URL,
+    DELIVERY_BANNER_URL,
 )
