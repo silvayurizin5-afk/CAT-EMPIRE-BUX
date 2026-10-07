@@ -641,19 +641,24 @@ class AutomationCog(commands.Cog):
             return
         self._cooldowns[key] = now
 
-        parsed = await self._interpret(message, products, list(config.provider_order or []))
-        if parsed is not None:
-            await self._handle_ai(
+        async with message.channel.typing():
+            parsed = await self._interpret(
                 message,
-                parsed,
                 products,
-                panel,
-                config.support_channel_id,
-                config.suggestions_channel_id,
+                list(config.provider_order or []),
             )
-            return
-        if not await self._fallback(message, products, config.suggestions_channel_id):
-            await self._support(message, None, config.support_channel_id)
+            if parsed is not None:
+                await self._handle_ai(
+                    message,
+                    parsed,
+                    products,
+                    panel,
+                    config.support_channel_id,
+                    config.suggestions_channel_id,
+                )
+                return
+            if not await self._fallback(message, products, config.suggestions_channel_id):
+                await self._support(message, None, config.support_channel_id)
 
 
 async def setup(bot: commands.Bot) -> None:

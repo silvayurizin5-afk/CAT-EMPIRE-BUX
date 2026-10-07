@@ -15,8 +15,20 @@ from app.services.branding import SUPPORT_BANNER_URL
 @dataclass(frozen=True, slots=True)
 class SupportOptions:
     enabled: bool = True
-    panel_title: str = "Central de atendimento"
-    panel_description: str = "Precisa de ajuda? Abra um ticket privado com nossa equipe."
+    panel_title: str = "Bem-vindo(a) ao Suporte da **NEXTBUY**"
+    panel_description: str = (
+        "- ***<a:raio_azurlu:1551077260382183514> Suporte para todas as suas compras***\n"
+        "- ***<:PIX:1549632822388592663> Dúvidas sobre produtos, pagamentos e entregas***\n"
+        "- ***<:CaixaStorm:1550043608952999996> Ajuda com problemas relacionados ao seu pedido***\n"
+        "\n"
+        "# <a:112771staff:1551076419721756762> Informações importantes\n"
+        "\n"
+        "***- <a:EstrelaDanante:1549633765142302751> Evite marcar a equipe repetidamente.***\n"
+        "- ***<a:s_ASETA2_:1550044035522109511> Não envie informações pessoais ou senhas no ticket.***\n"
+        "- ***<a:s_ASETA2_:1550044035522109511> Explique o problema com o máximo de detalhes possível.***\n"
+        "- ***<a:s_ASETA2_:1550044035522109511> Mantenha o respeito durante todo o atendimento.***\n"
+        "- ***<a:s_ASETA2_:1550044035522109511> Após enviar as informações, aguarde um membro da equipe responder.***"
+    )
     button_label: str = "Abrir ticket"
     button_emoji: str = "🎫"
     welcome: str = "{customer}, descreva sua dúvida. Nossa equipe vai atender você por aqui."

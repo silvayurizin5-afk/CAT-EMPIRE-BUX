@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -27,6 +28,36 @@ class AIProvider:
 
 class AIUnavailable(RuntimeError):
     pass
+
+
+_AI_CLIENT: httpx.AsyncClient | None = None
+_AI_CLIENT_LOCK = asyncio.Lock()
+
+
+async def _get_ai_client() -> httpx.AsyncClient:
+    global _AI_CLIENT
+    if _AI_CLIENT is not None and not _AI_CLIENT.is_closed:
+        return _AI_CLIENT
+
+    async with _AI_CLIENT_LOCK:
+        if _AI_CLIENT is None or _AI_CLIENT.is_closed:
+            _AI_CLIENT = httpx.AsyncClient(
+                timeout=httpx.Timeout(settings.ai_timeout_seconds),
+                limits=httpx.Limits(
+                    max_connections=20,
+                    max_keepalive_connections=10,
+                    keepalive_expiry=60.0,
+                ),
+            )
+        return _AI_CLIENT
+
+
+async def close_ai_client() -> None:
+    global _AI_CLIENT
+    client = _AI_CLIENT
+    _AI_CLIENT = None
+    if client is not None and not client.is_closed:
+        await client.aclose()
 
 
 def _provider(name: str) -> AIProvider | None:
@@ -227,32 +258,31 @@ async def request_structured_ai(
     if not providers:
         raise AIUnavailable("Nenhum provedor de IA foi configurado")
 
-    timeout = httpx.Timeout(settings.ai_timeout_seconds)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for provider in providers:
-            try:
-                raw = await _call_provider(
-                    client,
-                    provider=provider,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                )
-                parsed = _extract_json(raw)
-                logger.info("IA respondeu usando %s (%s)", provider.name, provider.model)
-                return parsed, provider.name
-            except httpx.HTTPStatusError as exc:
-                logger.warning(
-                    "Falha no provedor de IA %s: HTTP %s",
-                    provider.name,
-                    exc.response.status_code,
-                )
-                continue
-            except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                logger.warning(
-                    "Falha no provedor de IA %s: %s",
-                    provider.name,
-                    type(exc).__name__,
-                )
-                continue
+    client = await _get_ai_client()
+    for provider in providers:
+        try:
+            raw = await _call_provider(
+                client,
+                provider=provider,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            parsed = _extract_json(raw)
+            logger.info("IA respondeu usando %s (%s)", provider.name, provider.model)
+            return parsed, provider.name
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Falha no provedor de IA %s: HTTP %s",
+                provider.name,
+                exc.response.status_code,
+            )
+            continue
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Falha no provedor de IA %s: %s",
+                provider.name,
+                type(exc).__name__,
+            )
+            continue
 
     raise AIUnavailable("Todos os provedores de IA configurados falharam")
