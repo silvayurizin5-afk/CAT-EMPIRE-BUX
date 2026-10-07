@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -16,6 +17,8 @@ from app.core.config import settings
 from app.core.guild_guard import STORE_GUILD_ID, is_store_guild
 from app.db.session import SessionLocal
 from app.services.ai_gateway import available_providers
+from app.services.branding import FIXED_BRAND_MEDIA_URLS
+from app.services.store_media import StoreBannerError, cache_store_media_source
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -64,6 +67,16 @@ class NextBuyBot(commands.Bot):
             self.add_view(TicketStaffContainerLayout(order_id))
 
     async def setup_hook(self) -> None:
+        results = await asyncio.gather(
+            *(cache_store_media_source(url) for url in FIXED_BRAND_MEDIA_URLS),
+            return_exceptions=True,
+        )
+        for url, result in zip(FIXED_BRAND_MEDIA_URLS, results, strict=True):
+            if isinstance(result, Exception):
+                logger.warning("Falha ao fixar mídia visual %s: %s", url, result)
+            else:
+                logger.info("Mídia visual fixada no cache local: %.2f MB", result / (1024 * 1024))
+
         await self.load_extension("app.bot.cogs.admin")
         await self.load_extension("app.bot.cogs.staff")
         await self.load_extension("app.bot.cogs.feedback")
