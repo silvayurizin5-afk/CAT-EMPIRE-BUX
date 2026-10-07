@@ -77,8 +77,33 @@ async def test_thumbnail_is_prepared_as_stable_attachment(monkeypatch) -> None:
     prepared = await prepare_store_thumbnail(url, upload_limit=8 * 1024 * 1024)
 
     assert prepared is not None
+    assert prepared.data == source
+    assert not prepared.optimized
     assert prepared.filename == f"{thumbnail_attachment_prefix(url)}.png"
     assert prepared.attachment_url == f"attachment://{prepared.filename}"
+
+
+async def test_banner_within_upload_limit_keeps_original_gif(monkeypatch) -> None:
+    source = _animated_gif()
+
+    async def fake_download(_url: str) -> bytes:
+        return source
+
+    def fail_optimize(*_args, **_kwargs):
+        raise AssertionError("GIF não deveria ser recomprimido dentro do limite")
+
+    monkeypatch.setattr("app.services.store_media._download_image", fake_download)
+    monkeypatch.setattr("app.services.store_media._optimize_gif", fail_optimize)
+
+    prepared = await prepare_store_banner(
+        "https://example.com/brand-fast.gif",
+        upload_limit=len(source) + 1024,
+    )
+
+    assert prepared is not None
+    assert prepared.data == source
+    assert not prepared.optimized
+    assert prepared.filename.endswith(".gif")
 
 
 def test_reusable_thumbnail_attachment_is_found_by_source_hash() -> None:
