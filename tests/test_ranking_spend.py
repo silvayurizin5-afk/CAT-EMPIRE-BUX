@@ -37,7 +37,7 @@ def test_gamepass_brl_equivalent_uses_fixed_store_rate(
     )
 
 
-async def test_leaderboard_uses_product_robux_and_ignores_legacy_adjustment(
+async def test_leaderboard_applies_robux_economy_adjustment(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -52,7 +52,7 @@ async def test_leaderboard_uses_product_robux_and_ignores_legacy_adjustment(
                     "spent_adjustment": Decimal("0.00"),
                     "base_orders": 2,
                     "orders_adjustment": 0,
-                    "robux_adjustment": 99999,
+                    "robux_adjustment": -250,
                 }
             ]
         ),
@@ -65,8 +65,37 @@ async def test_leaderboard_uses_product_robux_and_ignores_legacy_adjustment(
 
     entries = await profiles.list_leaderboard(None, guild_id=1)
 
-    assert entries[0].robux_purchased == 1250
+    assert entries[0].robux_purchased == 1000
     assert entries[0].total_spent == Decimal("100.00")
+
+
+async def test_leaderboard_excludes_fully_reset_economy(monkeypatch) -> None:
+    monkeypatch.setattr(
+        profiles,
+        "_adjusted_spend_rows",
+        AsyncMock(
+            return_value=[
+                {
+                    "user_id": 1,
+                    "discord_user_id": 123,
+                    "base_spent": Decimal("100.00"),
+                    "spent_adjustment": Decimal("-100.00"),
+                    "base_orders": 2,
+                    "orders_adjustment": -2,
+                    "robux_adjustment": -1250,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        profiles,
+        "_robux_totals_for_users",
+        AsyncMock(return_value=({1: 1250}, [])),
+    )
+
+    entries = await profiles.list_leaderboard(None, guild_id=1)
+
+    assert entries == []
 
 
 @pytest.mark.skipif(
@@ -149,7 +178,7 @@ async def test_ranking_counts_robux_gamepass_and_ignores_items_accounts() -> Non
                     user_id=user.id,
                     spent_adjustment=0,
                     orders_adjustment=0,
-                    robux_adjustment=50000,
+                    robux_adjustment=0,
                 )
                 session.add(adjustment)
                 await session.flush()
@@ -185,15 +214,77 @@ async def test_ranking_counts_robux_gamepass_and_ignores_items_accounts() -> Non
                 assert profile.robux_purchased == 1200
                 assert adjustment.robux_adjustment == 0
 
-                # Remover ajustes volta ao histórico real sem mudar o total de Robux.
+                # Zerar economia também zera Robux e remove o usuário do ranking.
+                profile = await profiles.reset_user_economy(
+                    session,
+                    guild_id=guild_id,
+                    discord_user_id=user.discord_user_id,
+                )
+                assert profile.total_spent == Decimal("0.00")
+                assert profile.completed_orders == 0
+                assert profile.robux_purchased == 0
+                assert profile.leaderboard_position is None
+                assert adjustment.robux_adjustment == -1200
+
+                leaderboard = await profiles.list_leaderboard(
+                    session,
+                    guild_id=guild_id,
+                )
+                assert leaderboard == []
+
+                # Uma compra nova volta a contar a partir do zero, sem ressuscitar
+                # os valores anteriores ao reset.
+                new_order = Order(
+                    guild_id=guild_id,
+                    user_id=user.id,
+                    status="delivered",
+                    total_credits=Decimal("2.90"),
+                )
+                session.add(new_order)
+                await session.flush()
+                session.add(
+                    OrderItem(
+                        order_id=new_order.id,
+                        name_snapshot="Robux flexível • 100 Robux",
+                        quantity=1,
+                        unit_price=Decimal("2.90"),
+                        metadata_json={
+                            "product_type": "robux",
+                            "robux_amount": 100,
+                            "price_per_robux": "0.029",
+                        },
+                    )
+                )
+                await session.flush()
+
+                profile = await profiles.get_customer_profile(
+                    session,
+                    guild_id=guild_id,
+                    discord_user_id=user.discord_user_id,
+                )
+                assert profile.total_spent == Decimal("2.90")
+                assert profile.completed_orders == 1
+                assert profile.robux_purchased == 100
+                assert profile.leaderboard_position == 1
+
+                leaderboard = await profiles.list_leaderboard(
+                    session,
+                    guild_id=guild_id,
+                )
+                assert len(leaderboard) == 1
+                assert leaderboard[0].total_spent == Decimal("2.90")
+                assert leaderboard[0].completed_orders == 1
+                assert leaderboard[0].robux_purchased == 100
+
+                # Remover ajustes volta ao histórico real completo.
                 profile = await profiles.clear_user_economy_adjustment(
                     session,
                     guild_id=guild_id,
                     discord_user_id=user.discord_user_id,
                 )
-                assert profile.total_spent == Decimal("94.80")
-                assert profile.completed_orders == 4
-                assert profile.robux_purchased == 1200
+                assert profile.total_spent == Decimal("97.70")
+                assert profile.completed_orders == 5
+                assert profile.robux_purchased == 1300
 
                 await session.rollback()
     finally:

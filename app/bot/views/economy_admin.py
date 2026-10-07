@@ -13,6 +13,7 @@ from app.services.profiles import (
     CustomerProfile,
     clear_user_economy_adjustment,
     get_customer_profile,
+    reset_user_economy,
     set_user_economy_target,
 )
 
@@ -154,12 +155,10 @@ class EconomyResetConfirmView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with SessionLocal() as session, session.begin():
-            await set_user_economy_target(
+            profile = await reset_user_economy(
                 session,
                 guild_id=interaction.guild.id,
                 discord_user_id=self.target_user_id,
-                total_spent=Decimal("0"),
-                completed_orders=0,
             )
             await write_audit_log(
                 session,
@@ -170,9 +169,9 @@ class EconomyResetConfirmView(discord.ui.View):
                 target_id=str(self.target_user_id),
                 details={
                     "customer_discord_id": self.target_user_id,
-                    "amount_brl": "0.00",
-                    "robux_amount": 0,
-                    "quantity": 0,
+                    "amount_brl": str(profile.total_spent),
+                    "robux_amount": profile.robux_purchased,
+                    "quantity": profile.completed_orders,
                 },
             )
 

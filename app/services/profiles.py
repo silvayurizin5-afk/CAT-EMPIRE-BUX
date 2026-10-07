@@ -205,6 +205,9 @@ async def _adjusted_spend_rows(session: AsyncSession, guild_id: int):
                 func.coalesce(UserEconomyAdjustment.orders_adjustment, 0).label(
                     "orders_adjustment"
                 ),
+                func.coalesce(UserEconomyAdjustment.robux_adjustment, 0).label(
+                    "robux_adjustment"
+                ),
             )
             .outerjoin(spend, spend.c.user_id == User.id)
             .outerjoin(
@@ -393,10 +396,47 @@ async def set_user_economy_target(
         session.add(adjustment)
 
     adjustment.spent_adjustment = money(target_spent - base.total_spent)
-    # O ajuste manual de R$ não altera Robux; Robux vem das compras elegíveis.
-    adjustment.robux_adjustment = 0
+    # Configurar R$/compras não altera o total efetivo de Robux. Se já houver
+    # um ajuste de Robux (por exemplo, após zerar a economia), ele é preservado.
     adjustment.orders_adjustment = int(completed_orders - base.completed_orders)
     await session.flush()
+    return await get_customer_profile(
+        session,
+        guild_id=guild_id,
+        discord_user_id=discord_user_id,
+    )
+
+
+async def reset_user_economy(
+    session: AsyncSession,
+    *,
+    guild_id: int,
+    discord_user_id: int,
+) -> CustomerProfile:
+    """Zera R$, Robux e compras sem apagar o histórico real.
+
+    Os ajustes negativos congelam o histórico atual em zero. Compras futuras
+    continuam somando normalmente a partir desse novo ponto de partida.
+    """
+
+    user = await get_or_create_user(session, discord_user_id)
+    base = await get_economy_base(session, guild_id=guild_id, user_id=user.id)
+
+    adjustment = await session.scalar(
+        select(UserEconomyAdjustment).where(
+            UserEconomyAdjustment.guild_id == guild_id,
+            UserEconomyAdjustment.user_id == user.id,
+        )
+    )
+    if adjustment is None:
+        adjustment = UserEconomyAdjustment(guild_id=guild_id, user_id=user.id)
+        session.add(adjustment)
+
+    adjustment.spent_adjustment = money(-base.total_spent)
+    adjustment.robux_adjustment = -int(base.robux_purchased)
+    adjustment.orders_adjustment = -int(base.completed_orders)
+    await session.flush()
+
     return await get_customer_profile(
         session,
         guild_id=guild_id,
@@ -471,7 +511,13 @@ async def get_customer_profile(
         user_ids=[user.id],
         newest_first=True,
     )
-    robux_purchased = max(0, robux_by_user.get(user.id, 0))
+    robux_adjustment = (
+        int(user_economy["robux_adjustment"]) if user_economy is not None else 0
+    )
+    robux_purchased = max(
+        0,
+        robux_by_user.get(user.id, 0) + robux_adjustment,
+    )
 
     leaderboard_position: int | None = None
     if total_spent > ZERO or robux_purchased > 0:
@@ -538,7 +584,10 @@ async def list_leaderboard(
             0,
             int(row["base_orders"]) + int(row["orders_adjustment"]),
         )
-        robux_purchased = max(0, robux_by_user.get(user_id, 0))
+        robux_purchased = max(
+            0,
+            robux_by_user.get(user_id, 0) + int(row["robux_adjustment"]),
+        )
         if total_spent <= ZERO and robux_purchased <= 0 and completed_orders <= 0:
             continue
         entries.append(
